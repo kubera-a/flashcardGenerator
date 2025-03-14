@@ -10,9 +10,16 @@ dependencies = [
     "openai>=1.66.3",
     "pandas>=2.2.3",
     "pdfminer-six>=20240706",
+    "pre-commit>=4.1.0",
     "pydantic>=2.10.6",
     "pypdf2>=3.0.1",
     "pytest>=8.3.5",
     "python-dotenv>=1.0.1",
     "tqdm>=4.67.1",
 ]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+select = ["E", "F", "W", "I", "N", "UP", "B"]
+ignore = []
