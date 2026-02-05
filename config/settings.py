@@ -1,7 +1,9 @@
 """
 Configuration Module
 ------------------
-Configuration settings and prompts for the Anki Flashcard Generator.
+Configuration settings for the Anki Flashcard Generator.
+
+Note: Prompt templates are defined in config/prompts.py
 """
 
 import os
@@ -36,9 +38,9 @@ LLM_CONFIG = {
         "max_tokens": 1000,
     },
     "anthropic": {
-        "model": "claude-3-opus-20240229",
+        "model": "claude-sonnet-4-5",
         "temperature": 0.3,
-        "max_tokens": 1000,
+        "max_tokens": 16384,
     }
 }
 
@@ -49,99 +51,9 @@ ANKI_CONFIG = {
     "card_format": "basic"  # basic, cloze, etc.
 }
 
-# Processing options
+# Processing options (for text extraction fallback)
 CHUNK_SIZE = 3000  # characters
 MAX_CARDS_PER_CHUNK = 5
-
-# Prompt templates for card generation
-CARD_GENERATION_PROMPTS = {
-    "system_prompt": """
-    You are an expert in creating educational flashcards for software engineering topics.
-    Your task is to generate high-quality Anki flashcards that follow best practices 
-    for effective learning and retention.
-    
-    Always return your response in valid JSON format with no additional text or explanation.
-    """,
-
-    "user_prompt_template": """
-    I need you to create effective Anki flashcards based on the following content from a technical document about software engineering.
-    
-    Document Information:
-    Title: {title}
-    Author: {author}
-    
-    Content:
-    ```
-    {content}
-    ```
-    
-    Create up to {max_cards} high-quality flashcards with the following characteristics:
-    1. Each card should focus on a single, clear concept
-    2. The question (front) should be specific and unambiguous
-    3. The answer (back) should be concise but complete
-    4. Prioritize important concepts over trivial details
-    5. Avoid overly complex or compound questions
-    6. Formulate questions that test understanding, not just recall
-    7. Use clear, straightforward language
-    
-    For technical content, create cards that:
-    - Focus on core principles and concepts
-    - Include key definitions of important terms
-    - Cover relationships between concepts
-    - Address common misconceptions
-    - Include practical applications where relevant
-    
-    Return the cards as JSON only.
-    """
-}
-
-# Prompt templates for card validation
-CARD_VALIDATION_PROMPTS = {
-    "system_prompt": """
-    You are an expert in educational psychology and spaced repetition learning.
-    Your task is to review and improve flashcards for effectiveness.
-    
-    Return only valid JSON with the improved cards. Do not include any explanations or additional text.
-    """,
-
-    "user_prompt_template": """
-    Review the following flashcards for quality and effectiveness:
-    
-    {cards_str}
-    
-    For each card, evaluate:
-    1. Is the question clear and specific?
-    2. Is the answer concise but complete?
-    3. Does the card focus on an important concept?
-    4. Is the card formatted properly?
-    
-    Improve any cards that don't meet these criteria.
-    Return only the improved cards in JSON format.
-    """
-}
-
-# Output formats for LLM responses
-OUTPUT_FORMATS = {
-    "card_generation": {
-        "cards": [
-            {
-                "front": "Question text goes here",
-                "back": "Answer text goes here",
-                "tags": ["tag1", "tag2"]
-            }
-        ]
-    },
-
-    "card_validation": {
-        "improved_cards": [
-            {
-                "front": "Improved question text",
-                "back": "Improved answer text",
-                "tags": ["tag1", "tag2"]
-            }
-        ]
-    }
-}
 
 # Logging configuration
 LOGGING_CONFIG = {
