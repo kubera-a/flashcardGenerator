@@ -16,6 +16,12 @@ dependencies = [
     "pytest>=8.3.5",
     "python-dotenv>=1.0.1",
     "tqdm>=4.67.1",
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+    "sqlalchemy>=2.0.0",
+    "python-multipart>=0.0.9",
+    "aiofiles>=23.2.1",
+    "pdf2image>=1.16.0",
 ]
 
 [tool.ruff]
@@ -24,4 +30,9 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B"]
-ignore = ["E501"]
+ignore = [
+    "E501",  # Line too long
+    "B008",  # Function call in default argument (required for FastAPI Depends)
+    "B904",  # Exception chaining (overkill for simple API handlers)
+    "N999",  # Invalid module name (parent directory has capital letters)
+]
