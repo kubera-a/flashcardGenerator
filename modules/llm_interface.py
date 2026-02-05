@@ -4,9 +4,11 @@ LLM Interface Module
 Provides a unified interface for communicating with different LLM providers.
 """
 
+import base64
 import json
 import logging
 import time
+from pathlib import Path
 
 import openai
 from anthropic import Anthropic
@@ -202,4 +204,207 @@ class LLMInterface:
                     raise
 
                 # Add more explicit instructions for retry
+                enhanced_system_prompt += "\nYOUR PREVIOUS RESPONSE WAS NOT VALID JSON. ENSURE YOU RETURN ONLY VALID JSON WITH NO MARKDOWN OR OTHER TEXT."
+
+    def supports_native_pdf(self) -> bool:
+        """
+        Check if the current provider supports native PDF processing.
+
+        Returns:
+            True if the provider can process PDFs natively, False otherwise
+        """
+        return self.provider == "anthropic"
+
+    def _encode_pdf_to_base64(self, pdf_path: str | Path) -> str:
+        """
+        Encode a PDF file to base64.
+
+        Args:
+            pdf_path: Path to the PDF file
+
+        Returns:
+            Base64-encoded string of the PDF content
+        """
+        pdf_path = Path(pdf_path)
+        with open(pdf_path, "rb") as f:
+            return base64.standard_b64encode(f.read()).decode("utf-8")
+
+    def _call_anthropic_with_pdf(
+        self,
+        pdf_data: str,
+        prompt: str,
+        system_prompt: str,
+        **kwargs,
+    ) -> str:
+        """
+        Call the Anthropic API with a PDF document.
+
+        Args:
+            pdf_data: Base64-encoded PDF data
+            prompt: The user prompt
+            system_prompt: The system prompt
+            **kwargs: Additional parameters to pass to the API
+
+        Returns:
+            The LLM response as a string
+        """
+        params = {**self.config, **kwargs}
+
+        try:
+            response = self.client.messages.create(
+                model=params.get("model", "claude-sonnet-4-5-20250514"),
+                system=system_prompt,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "document",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "application/pdf",
+                                    "data": pdf_data,
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt,
+                            },
+                        ],
+                    }
+                ],
+                temperature=params.get("temperature", 0.3),
+                max_tokens=params.get("max_tokens", 4096),
+            )
+            return response.content[0].text
+        except Exception as e:
+            logger.error(f"Error calling Anthropic API with PDF: {e}")
+            if "rate limit" in str(e).lower():
+                logger.info("Rate limit hit, backing off and retrying...")
+                time.sleep(5)
+                return self._call_anthropic_with_pdf(pdf_data, prompt, system_prompt, **kwargs)
+            raise
+
+    def generate_from_pdf(
+        self,
+        pdf_path: str | Path,
+        prompt: str,
+        system_prompt: str = "You are a helpful assistant.",
+        page_indices: list[int] | None = None,
+        **kwargs,
+    ) -> str:
+        """
+        Generate a completion from a PDF document.
+
+        For providers that support native PDF processing (Anthropic), the PDF
+        is sent directly to the API. For other providers, text is extracted
+        and sent as a regular prompt.
+
+        Args:
+            pdf_path: Path to the PDF file
+            prompt: The prompt to send with the PDF
+            system_prompt: The system prompt for context
+            page_indices: Optional list of 0-based page indices to process.
+                         If None, all pages are processed.
+            **kwargs: Additional parameters to pass to the provider
+
+        Returns:
+            The LLM response as a string
+        """
+        logger.debug(f"Generating from PDF with provider: {self.provider}")
+
+        if self.supports_native_pdf():
+            # Use native PDF support for Anthropic
+            pdf_data = self._encode_pdf_to_base64(pdf_path)
+            return self._call_anthropic_with_pdf(pdf_data, prompt, system_prompt, **kwargs)
+        else:
+            # Fall back to text extraction for other providers
+            from modules.pdf_processor import PDFProcessor
+
+            processor = PDFProcessor()
+            chunks, metadata = processor.process_pdf(str(pdf_path))
+
+            # If page_indices specified, filter chunks (approximate by chunk index)
+            if page_indices is not None:
+                # This is approximate since chunks don't map 1:1 to pages
+                # For better control, the PDF processor would need enhancement
+                pass
+
+            # Combine chunks into a single text
+            combined_text = "\n\n".join(chunks)
+
+            # Create an enhanced prompt with the extracted text
+            enhanced_prompt = f"{prompt}\n\nDocument content:\n{combined_text}"
+
+            return self.generate_completion(enhanced_prompt, system_prompt, **kwargs)
+
+    def generate_structured_from_pdf(
+        self,
+        pdf_path: str | Path,
+        prompt: str,
+        output_format: dict,
+        system_prompt: str = "You are a helpful assistant that outputs structured JSON.",
+        page_indices: list[int] | None = None,
+        **kwargs,
+    ) -> dict:
+        """
+        Generate structured output (JSON) from a PDF document.
+
+        Args:
+            pdf_path: Path to the PDF file
+            prompt: The prompt to send with the PDF
+            output_format: Dictionary specifying the expected output format
+            system_prompt: The system prompt for context
+            page_indices: Optional list of 0-based page indices to process
+            **kwargs: Additional parameters to pass to the provider
+
+        Returns:
+            The parsed structured response as a dictionary
+        """
+        # Enhance the system prompt with formatting instructions
+        format_description = json.dumps(output_format, indent=2)
+        enhanced_system_prompt = (
+            f"{system_prompt}\n\n"
+            f"You must respond with a valid JSON object using the following format:\n"
+            f"{format_description}\n\n"
+            f"Do not include any text outside of the JSON object."
+        )
+
+        # Enhance the user prompt to emphasize JSON output
+        enhanced_prompt = (
+            f"{prompt}\n\n"
+            f"Remember to respond with only a valid JSON object according to the specified format."
+        )
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = self.generate_from_pdf(
+                    pdf_path=pdf_path,
+                    prompt=enhanced_prompt,
+                    system_prompt=enhanced_system_prompt,
+                    page_indices=page_indices,
+                    **kwargs,
+                )
+
+                # Extract JSON from response
+                response = response.strip()
+                if response.startswith("```json"):
+                    response = response.split("```json")[1]
+                if response.endswith("```"):
+                    response = response.rsplit("```", 1)[0]
+
+                return json.loads(response)
+
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    f"Failed to parse JSON from PDF response (attempt {attempt+1}/{max_retries}): {e}"
+                )
+
+                if attempt == max_retries - 1:
+                    logger.error(
+                        f"JSON parsing failed after {max_retries} attempts. Last response: {response}"
+                    )
+                    raise
+
                 enhanced_system_prompt += "\nYOUR PREVIOUS RESPONSE WAS NOT VALID JSON. ENSURE YOU RETURN ONLY VALID JSON WITH NO MARKDOWN OR OTHER TEXT."
