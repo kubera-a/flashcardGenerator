@@ -8,8 +8,9 @@ An automated system for generating high-quality Anki flashcards from PDF documen
 - **Claude Native PDF Support**: Send PDFs directly to Claude for better understanding of visual elements, charts, and diagrams
 - **Page Selection**: Preview PDF pages and select specific pages to generate flashcards from
 - **Intelligent Card Generation**: Use LLMs to create effective question-answer pairs
-- **Card Review Workflow**: Approve, reject, or edit generated cards with feedback
+- **Card Review Workflow**: Approve, reject, or edit generated cards with feedback (change your decision anytime)
 - **Auto-Correction**: LLM-powered card improvement based on rejection feedback
+- **Export Options**: Export to Anki or download CSV directly with save dialog
 - **Prompt Evolution**: System learns from your feedback to improve future card generation
 - **Anki Integration**: Export approved cards in a format ready for Anki import
 - **Flexible API Support**: Works with OpenAI (GPT-4) or Anthropic (Claude) models
@@ -142,8 +143,12 @@ Open http://localhost:5173 in your browser.
    - **OpenAI (GPT-4)**: Uses text extraction
 4. **Generate Cards**: Click to start generation
 5. **Review Cards**: Approve, reject (with feedback), or edit each card
+   - You can change your decision at any time (approve a rejected card, reject an approved card)
+   - Finalized sessions can still be viewed and cards re-exported
 6. **Finalize Session**: Triggers prompt evolution analysis
 7. **Export**: Download approved cards as Anki-compatible CSV
+   - "Export to Anki" opens the file in a new tab
+   - "Download CSV" triggers a save dialog to choose the download location
 
 ### Command Line Interface
 
