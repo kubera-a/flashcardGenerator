@@ -160,6 +160,12 @@ function CardItem({
             {card.status === 'rejected' && (
               <>
                 <button
+                  className="btn btn-success"
+                  onClick={() => onApprove(card.id)}
+                >
+                  Approve
+                </button>
+                <button
                   className="btn btn-primary"
                   onClick={() => onAutoCorrect(card.id)}
                 >
@@ -174,12 +180,20 @@ function CardItem({
               </>
             )}
             {(card.status === 'approved' || card.status === 'edited') && (
-              <button
-                className="btn btn-secondary"
-                onClick={() => setIsEditing(true)}
-              >
-                Edit
-              </button>
+              <>
+                <button
+                  className="btn btn-danger"
+                  onClick={() => setIsRejecting(true)}
+                >
+                  Reject
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => setIsEditing(true)}
+                >
+                  Edit
+                </button>
+              </>
             )}
           </div>
         </>
@@ -265,6 +279,37 @@ export default function ReviewPage() {
       const downloadUrl = `${baseUrl}${response.data.download_url}`;
       window.open(downloadUrl, '_blank');
     },
+    onError: (error) => {
+      console.error('Export failed:', error);
+      alert('Export to Anki failed. Try using "Download CSV" instead.');
+    },
+  });
+
+  const downloadCsvMutation = useMutation({
+    mutationFn: async () => {
+      const response = await exportApi.exportSession(Number(sessionId));
+      return response.data;
+    },
+    onSuccess: async (data) => {
+      const baseUrl = import.meta.env.DEV ? 'http://localhost:8000' : '';
+      const downloadUrl = `${baseUrl}${data.download_url}`;
+
+      // Fetch the CSV and trigger download with save dialog
+      const response = await fetch(downloadUrl);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = data.filename || 'flashcards.csv';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    },
+    onError: (error) => {
+      console.error('CSV download failed:', error);
+      alert('Failed to download CSV. Please try again.');
+    },
   });
 
   if (sessionLoading) {
@@ -316,13 +361,22 @@ export default function ReviewPage() {
             </button>
           )}
           {(session.approved_count > 0) && (
-            <button
-              className="btn btn-secondary"
-              onClick={() => exportMutation.mutate()}
-              disabled={exportMutation.isPending}
-            >
-              {exportMutation.isPending ? 'Exporting...' : 'Export to Anki'}
-            </button>
+            <>
+              <button
+                className="btn btn-secondary"
+                onClick={() => exportMutation.mutate()}
+                disabled={exportMutation.isPending}
+              >
+                {exportMutation.isPending ? 'Exporting...' : 'Export to Anki'}
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={() => downloadCsvMutation.mutate()}
+                disabled={downloadCsvMutation.isPending}
+              >
+                {downloadCsvMutation.isPending ? 'Downloading...' : 'Download CSV'}
+              </button>
+            </>
           )}
         </div>
       </div>

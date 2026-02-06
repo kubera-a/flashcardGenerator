@@ -62,7 +62,7 @@ async def export_session_cards(
 
     # Export using AnkiExporter
     exporter = AnkiExporter(
-        default_deck=request.deck_name or "Generated::Flashcards",
+        config={"default_deck": request.deck_name or "Generated::Flashcards", "default_tags": []}
     )
     exporter.export_to_csv(flashcards, str(output_path))
 

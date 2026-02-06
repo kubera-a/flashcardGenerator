@@ -68,12 +68,12 @@ function SessionCard({ session, onDelete, onExport }: {
       </div>
 
       <div className="session-actions">
-        {(session.status === 'ready' || session.status === 'reviewing') && (
+        {(session.status === 'ready' || session.status === 'reviewing' || session.status === 'finalized') && (
           <button
             className="btn btn-primary"
             onClick={() => navigate(`/review/${session.id}`)}
           >
-            Review Cards
+            {session.status === 'finalized' ? 'View Cards' : 'Review Cards'}
           </button>
         )}
         {(session.approved_count > 0 || session.status === 'finalized') && (
