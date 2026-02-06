@@ -2,11 +2,13 @@
 
 export type CardStatus = 'pending' | 'approved' | 'rejected' | 'edited';
 export type RejectionType = 'unclear' | 'incorrect' | 'too_complex' | 'duplicate' | 'other';
+export type SourceType = 'pdf' | 'markdown';
 
 export interface Session {
   id: number;
   filename: string;
   status: string;
+  source_type: SourceType;
   total_chunks: number;
   processed_chunks: number;
   llm_provider: string;
@@ -30,6 +32,13 @@ export interface SessionStatus {
   progress_percent: number;
 }
 
+export interface CardImage {
+  id: number;
+  original_filename: string;
+  stored_filename: string;
+  media_type: string;
+}
+
 export interface Card {
   id: number;
   session_id: number;
@@ -42,6 +51,7 @@ export interface Card {
   chunk_index: number;
   created_at: string;
   reviewed_at: string | null;
+  images: CardImage[];
 }
 
 export interface CardRejection {
@@ -106,6 +116,13 @@ export interface ExportResponse {
   download_url: string;
 }
 
+export interface ExportWithMediaResponse {
+  filename: string;
+  card_count: number;
+  image_count: number;
+  download_url: string;
+}
+
 export interface BatchOperationResponse {
   processed: number;
   failed: number;
@@ -131,4 +148,14 @@ export interface PDFPreviewResponse {
 export interface StartGenerationRequest {
   page_indices: number[] | null;
   use_native_pdf: boolean;
+}
+
+// Markdown Preview Types
+export interface MarkdownPreviewResponse {
+  session_id: number;
+  filename: string;
+  title: string | null;
+  image_count: number;
+  content_preview: string;
+  images: string[];
 }

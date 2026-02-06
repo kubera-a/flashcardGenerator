@@ -1,17 +1,65 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { sessionsApi, cardsApi, exportApi } from '../api/client';
+import { sessionsApi, cardsApi, exportApi, imagesApi } from '../api/client';
 import type { Card, SessionWithStats, RejectionType } from '../types';
+
+// Convert [IMAGE: filename] references to img tags
+function renderWithImages(text: string, sessionId: number): React.ReactNode {
+  const pattern = /\[IMAGE:\s*([^\]]+)\]/g;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+
+  while ((match = pattern.exec(text)) !== null) {
+    // Add text before the match
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+
+    // Add the image
+    const filename = match[1].trim();
+    const imageUrl = imagesApi.getOriginalImageUrl(sessionId, filename);
+    parts.push(
+      <img
+        key={key++}
+        src={imageUrl}
+        alt={filename}
+        className="card-image"
+        style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain', display: 'block', margin: '8px auto' }}
+        onError={(e) => {
+          // Try stored filename format if original fails
+          const target = e.target as HTMLImageElement;
+          const storedUrl = imagesApi.getImageUrl(sessionId, `${sessionId}_${filename.replace(/ /g, '_')}`);
+          if (target.src !== storedUrl) {
+            target.src = storedUrl;
+          }
+        }}
+      />
+    );
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return <>{parts}</>;
+}
 
 function CardItem({
   card,
+  sessionId,
   onApprove,
   onReject,
   onEdit,
   onAutoCorrect,
 }: {
   card: Card;
+  sessionId: number;
   onApprove: (id: number) => void;
   onReject: (id: number, reason: string, type: RejectionType) => void;
   onEdit: (id: number, front: string, back: string) => void;
@@ -120,10 +168,10 @@ function CardItem({
         <>
           <div className="card-content">
             <div className="card-front">
-              <strong>Q:</strong> {card.front}
+              <strong>Q:</strong> {renderWithImages(card.front, sessionId)}
             </div>
             <div className="card-back">
-              <strong>A:</strong> {card.back}
+              <strong>A:</strong> {renderWithImages(card.back, sessionId)}
             </div>
             {card.tags.length > 0 && (
               <div className="card-tags">
@@ -312,6 +360,37 @@ export default function ReviewPage() {
     },
   });
 
+  const exportWithMediaMutation = useMutation({
+    mutationFn: async () => {
+      const response = await exportApi.exportSessionWithMedia(Number(sessionId));
+      return response.data;
+    },
+    onSuccess: async (data) => {
+      const baseUrl = import.meta.env.DEV ? 'http://localhost:8000' : '';
+      const downloadUrl = `${baseUrl}${data.download_url}`;
+
+      // Fetch the ZIP and trigger download with save dialog
+      const response = await fetch(downloadUrl);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = data.filename || 'flashcards_with_media.zip';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    },
+    onError: (error) => {
+      console.error('Export with media failed:', error);
+      alert('Failed to export with media. Please try again.');
+    },
+  });
+
+  // Check if session has images (markdown session)
+  const hasImages = session?.source_type === 'markdown' ||
+    (session?.pdf_metadata as Record<string, unknown> | null)?.image_count;
+
   if (sessionLoading) {
     return <div className="loading">Loading session...</div>;
   }
@@ -376,6 +455,15 @@ export default function ReviewPage() {
               >
                 {downloadCsvMutation.isPending ? 'Downloading...' : 'Download CSV'}
               </button>
+              {hasImages && (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => exportWithMediaMutation.mutate()}
+                  disabled={exportWithMediaMutation.isPending}
+                >
+                  {exportWithMediaMutation.isPending ? 'Exporting...' : 'Export with Images'}
+                </button>
+              )}
             </>
           )}
         </div>
@@ -418,6 +506,7 @@ export default function ReviewPage() {
                 <CardItem
                   key={card.id}
                   card={card}
+                  sessionId={Number(sessionId)}
                   onApprove={(id) => approveMutation.mutate(id)}
                   onReject={(id, reason, type) => rejectMutation.mutate({ id, reason, type })}
                   onEdit={(id, front, back) => editMutation.mutate({ id, front, back })}

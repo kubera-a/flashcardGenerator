@@ -9,9 +9,11 @@ from sqlalchemy.orm import Session
 from backend.db.database import SessionLocal
 from backend.db.models import (
     Card,
+    CardImage,
     CardStatus,
     PromptType,
     SessionStatus,
+    SourceType,
 )
 from backend.db.models import (
     Session as DBSession,
@@ -24,9 +26,11 @@ from config.prompts import (
     BATCH_CONTEXT_TEMPLATE,
     CONTINUE_GENERATION_PROMPT,
     GENERATION_PROMPT,
+    MARKDOWN_GENERATION_PROMPT,
 )
 from modules.card_generation import CardGenerator
 from modules.llm_interface import LLMInterface
+from modules.markdown_processor import MarkdownProcessor
 from modules.pdf_processor import PDFProcessor
 
 logger = logging.getLogger(__name__)
@@ -40,6 +44,7 @@ def create_session(
     filename: str,
     file_path: str,
     llm_provider: str = "openai",
+    source_type: str = SourceType.PDF.value,
 ) -> DBSession:
     """Create a new card generation session."""
     # Get active generation prompt
@@ -49,6 +54,7 @@ def create_session(
         filename=filename,
         file_path=file_path,
         llm_provider=llm_provider,
+        source_type=source_type,
         status=SessionStatus.PROCESSING.value,
         prompt_version_id=gen_prompt.id if gen_prompt else None,
     )
@@ -509,6 +515,196 @@ def continue_generation(
             session = db.query(DBSession).filter(DBSession.id == session_id).first()
             if session:
                 session.status = SessionStatus.READY.value  # Return to ready, not failed
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+def process_markdown_and_generate_cards(
+    session_id: int,
+    db: Session | None = None,
+) -> None:
+    """
+    Process a markdown document with images and generate cards.
+
+    This function:
+    1. Parses the markdown document and extracts image references
+    2. Sends the markdown content + images to Claude for multimodal processing
+    3. Creates cards with image references in the format [IMAGE: filename.png]
+    4. Stores CardImage records linking images to cards
+
+    Note: This function creates its own database session for use in background tasks.
+    """
+    db = SessionLocal()
+
+    try:
+        session = db.query(DBSession).filter(DBSession.id == session_id).first()
+        if not session:
+            logger.error(f"Session {session_id} not found")
+            return
+
+        metadata = session.pdf_metadata or {}
+
+        # Get paths from metadata
+        base_dir = Path(metadata.get("base_dir", ""))
+
+        if not base_dir.exists():
+            logger.error(f"Markdown base directory not found: {base_dir}")
+            session.status = SessionStatus.FAILED.value
+            session.pdf_metadata["error"] = "Markdown base directory not found"
+            db.commit()
+            return
+
+        # Parse the markdown file
+        processor = MarkdownProcessor()
+        doc = processor.parse_markdown(Path(session.file_path))
+
+        # Initialize LLM (must be Anthropic for image support)
+        llm = LLMInterface(provider=session.llm_provider)
+
+        if session.llm_provider != "anthropic":
+            logger.error("Markdown with images requires Anthropic provider")
+            session.status = SessionStatus.FAILED.value
+            session.pdf_metadata["error"] = "Markdown with images requires Anthropic provider"
+            db.commit()
+            return
+
+        # Get list of existing image paths
+        existing_images = [img for img in doc.images if img.exists and img.absolute_path]
+
+        # Update session metadata with image count
+        session.total_chunks = 1  # Single batch for markdown
+        session.pdf_metadata["image_count"] = len(existing_images)
+        db.commit()
+
+        # Build prompt using centralized template
+        image_list = "\n".join(
+            f"- {img.relative_path}" for img in existing_images
+        )
+        prompt = MARKDOWN_GENERATION_PROMPT.user_prompt_template.format(
+            image_count=len(existing_images),
+            image_list=image_list,
+            batch_context="",  # No batching for markdown
+        )
+        system_prompt = MARKDOWN_GENERATION_PROMPT.system_prompt
+        output_format = MARKDOWN_GENERATION_PROMPT.output_format
+
+        # Collect image paths for LLM
+        image_paths = [img.absolute_path for img in existing_images]
+
+        # Generate cards from markdown with images
+        try:
+            response = llm.generate_structured_from_markdown(
+                markdown_content=doc.content,
+                images=image_paths,
+                prompt=prompt,
+                output_format=output_format,
+                system_prompt=system_prompt,
+            )
+        except Exception as e:
+            logger.error(f"Error generating cards from markdown: {e}", exc_info=True)
+            session.status = SessionStatus.FAILED.value
+            session.pdf_metadata["error"] = str(e)
+            db.commit()
+            return
+
+        # Create image filename mapping for storage
+        image_mapping = processor.get_image_mapping(doc, session.id)
+
+        # Define image storage directory
+        image_storage_dir = Path(__file__).parent.parent.parent / "data" / "card_images"
+        image_storage_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy images to storage with session-prefixed names
+        processor.copy_images_to_storage(doc, image_mapping, image_storage_dir)
+
+        # Save cards to database
+        card_count = 0
+        for card_data in response.get("cards", []):
+            front = card_data.get("front", "")
+            back = card_data.get("back", "")
+            tags = card_data.get("tags", [])
+            card_images = card_data.get("images", [])
+
+            # Add source tag
+            if metadata.get("title"):
+                tags.append(metadata["title"].replace(" ", "_").lower())
+
+            # Create the card
+            db_card = Card(
+                session_id=session.id,
+                front=front,
+                back=back,
+                tags=tags,
+                status=CardStatus.PENDING.value,
+                chunk_index=0,
+            )
+            db.add(db_card)
+            db.flush()  # Get the card ID
+
+            # Create CardImage records for images referenced in this card
+            for img_filename in card_images:
+                # Find the matching image in our document
+                matching_img = None
+                for img in existing_images:
+                    # Match by filename (with or without path)
+                    if img_filename in img.relative_path or Path(img.relative_path).name == img_filename:
+                        matching_img = img
+                        break
+
+                if matching_img and matching_img.relative_path in image_mapping:
+                    stored_name = image_mapping[matching_img.relative_path]
+                    file_size = matching_img.absolute_path.stat().st_size if matching_img.absolute_path else 0
+
+                    # Determine media type from extension
+                    suffix = matching_img.absolute_path.suffix.lower() if matching_img.absolute_path else ".png"
+                    media_types = {
+                        ".png": "image/png",
+                        ".jpg": "image/jpeg",
+                        ".jpeg": "image/jpeg",
+                        ".gif": "image/gif",
+                        ".webp": "image/webp",
+                    }
+                    media_type = media_types.get(suffix, "image/png")
+
+                    card_image = CardImage(
+                        card_id=db_card.id,
+                        session_id=session.id,
+                        original_filename=img_filename,
+                        stored_filename=stored_name,
+                        media_type=media_type,
+                        file_size=file_size,
+                    )
+                    db.add(card_image)
+
+            card_count += 1
+
+        session.processed_chunks = 1
+        session.status = SessionStatus.READY.value
+        session.completed_at = datetime.utcnow()
+        session.pdf_metadata["cards_generated"] = card_count
+
+        # Update prompt metrics
+        if session.prompt_version_id:
+            update_prompt_metrics(
+                db,
+                session.prompt_version_id,
+                cards_generated=card_count,
+            )
+
+        db.commit()
+        logger.info(f"Markdown processing completed for session {session_id}: {card_count} cards generated")
+
+    except Exception as e:
+        logger.error(f"Error processing markdown session {session_id}: {e}", exc_info=True)
+        try:
+            session = db.query(DBSession).filter(DBSession.id == session_id).first()
+            if session:
+                session.status = SessionStatus.FAILED.value
+                session.pdf_metadata = session.pdf_metadata or {}
+                session.pdf_metadata["error"] = str(e)
                 db.commit()
         except Exception:
             pass

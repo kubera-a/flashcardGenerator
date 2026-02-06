@@ -22,9 +22,9 @@ function Layout() {
   return (
     <div className="app-container">
       <nav className="navbar">
-        <div className="nav-brand">
+        <Link to="/" className="nav-brand">
           <h1>Flashcard Generator</h1>
-        </div>
+        </Link>
         <div className="nav-links">
           <NavLink to="/">Sessions</NavLink>
           <NavLink to="/upload">Upload</NavLink>

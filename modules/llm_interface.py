@@ -408,3 +408,176 @@ class LLMInterface:
                     raise
 
                 enhanced_system_prompt += "\nYOUR PREVIOUS RESPONSE WAS NOT VALID JSON. ENSURE YOU RETURN ONLY VALID JSON WITH NO MARKDOWN OR OTHER TEXT."
+
+    def _encode_image_to_base64(self, image_path: Path) -> tuple[str, str]:
+        """
+        Encode an image file to base64 and determine its media type.
+
+        Args:
+            image_path: Path to the image file
+
+        Returns:
+            Tuple of (base64_data, media_type)
+        """
+        suffix = image_path.suffix.lower()
+        media_types = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+        }
+        media_type = media_types.get(suffix, "image/png")
+
+        with open(image_path, "rb") as f:
+            data = base64.standard_b64encode(f.read()).decode("utf-8")
+
+        return data, media_type
+
+    def _call_anthropic_with_images(
+        self,
+        text_content: str,
+        images: list[tuple[str, str]],  # List of (base64_data, media_type)
+        system_prompt: str,
+        **kwargs,
+    ) -> str:
+        """
+        Call Anthropic API with text and multiple images.
+
+        Args:
+            text_content: The text prompt
+            images: List of (base64_data, media_type) tuples
+            system_prompt: The system prompt
+            **kwargs: Additional parameters
+
+        Returns:
+            The LLM response as a string
+        """
+        params = {**self.config, **kwargs}
+
+        # Build content array with images first, then text
+        content = []
+        for img_data, media_type in images:
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": img_data,
+                    },
+                }
+            )
+        content.append(
+            {
+                "type": "text",
+                "text": text_content,
+            }
+        )
+
+        try:
+            response = self.client.messages.create(
+                model=params.get("model", "claude-sonnet-4-5-20250514"),
+                system=system_prompt,
+                messages=[{"role": "user", "content": content}],
+                temperature=params.get("temperature", 0.3),
+                max_tokens=params.get("max_tokens", 4096),
+            )
+            return response.content[0].text
+        except Exception as e:
+            logger.error(f"Error calling Anthropic API with images: {e}")
+            if "rate limit" in str(e).lower():
+                logger.info("Rate limit hit, backing off and retrying...")
+                time.sleep(5)
+                return self._call_anthropic_with_images(
+                    text_content, images, system_prompt, **kwargs
+                )
+            raise
+
+    def generate_structured_from_markdown(
+        self,
+        markdown_content: str,
+        images: list[Path],
+        prompt: str,
+        output_format: dict,
+        system_prompt: str = "You are a helpful assistant that outputs structured JSON.",
+        **kwargs,
+    ) -> dict:
+        """
+        Generate structured output from markdown content with images.
+
+        This method sends markdown text along with associated images to Claude
+        for multimodal understanding and card generation.
+
+        Args:
+            markdown_content: The markdown text content
+            images: List of image paths to include
+            prompt: The user prompt
+            output_format: Dictionary specifying expected output format
+            system_prompt: The system prompt
+            **kwargs: Additional parameters
+
+        Returns:
+            Parsed JSON response as a dictionary
+
+        Raises:
+            ValueError: If not using Anthropic provider
+        """
+        if not self.supports_native_pdf():
+            raise ValueError("Image support requires Anthropic provider")
+
+        # Encode all images
+        encoded_images = []
+        for img_path in images:
+            if img_path.exists():
+                data, media_type = self._encode_image_to_base64(img_path)
+                encoded_images.append((data, media_type))
+                logger.debug(f"Encoded image: {img_path.name} ({media_type})")
+
+        logger.info(f"Sending {len(encoded_images)} images with markdown to Claude")
+
+        # Combine markdown and prompt
+        full_prompt = f"{prompt}\n\n## Document Content:\n{markdown_content}"
+
+        # Add output format instructions
+        format_desc = json.dumps(output_format, indent=2)
+        enhanced_system = (
+            f"{system_prompt}\n\n"
+            f"You must respond with a valid JSON object using the following format:\n"
+            f"{format_desc}\n\n"
+            f"Do not include any text outside of the JSON object."
+        )
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = self._call_anthropic_with_images(
+                    full_prompt, encoded_images, enhanced_system, **kwargs
+                )
+
+                # Parse JSON response
+                response = response.strip()
+                if response.startswith("```json"):
+                    response = response.split("```json")[1]
+                if response.endswith("```"):
+                    response = response.rsplit("```", 1)[0]
+
+                return json.loads(response)
+
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    f"Failed to parse JSON from markdown response "
+                    f"(attempt {attempt + 1}/{max_retries}): {e}"
+                )
+
+                if attempt == max_retries - 1:
+                    logger.error(
+                        f"JSON parsing failed after {max_retries} attempts. "
+                        f"Last response: {response}"
+                    )
+                    raise
+
+                enhanced_system += (
+                    "\nYOUR PREVIOUS RESPONSE WAS NOT VALID JSON. "
+                    "ENSURE YOU RETURN ONLY VALID JSON WITH NO MARKDOWN OR OTHER TEXT."
+                )

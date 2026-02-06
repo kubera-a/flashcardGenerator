@@ -8,9 +8,9 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from backend.db.database import get_db
-from backend.db.models import Card, CardStatus
+from backend.db.models import Card, CardImage, CardStatus
 from backend.db.models import Session as DBSession
-from backend.db.schemas import ExportRequest, ExportResponse
+from backend.db.schemas import ExportRequest, ExportResponse, ExportWithMediaResponse
 from modules.anki_integration import AnkiExporter
 from modules.card_generation import FlashCard
 
@@ -18,6 +18,8 @@ router = APIRouter()
 
 EXPORTS_DIR = Path(__file__).parent.parent.parent.parent / "data" / "exports"
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+IMAGE_STORAGE_DIR = Path(__file__).parent.parent.parent.parent / "data" / "card_images"
 
 
 @router.post("/session/{session_id}", response_model=ExportResponse)
@@ -100,3 +102,104 @@ async def list_exports():
         })
 
     return {"exports": sorted(exports, key=lambda x: x["created_at"], reverse=True)}
+
+
+@router.post("/session/{session_id}/with-media", response_model=ExportWithMediaResponse)
+async def export_session_with_media(
+    session_id: int,
+    request: ExportRequest = ExportRequest(),
+    db: Session = Depends(get_db),
+):
+    """
+    Export approved cards with media as a ZIP file.
+
+    For markdown sessions with images, this exports:
+    - cards.csv with HTML img tags
+    - media/ folder containing all referenced images
+
+    For PDF sessions without images, falls back to regular CSV export wrapped in a ZIP.
+    """
+    session = db.query(DBSession).filter(DBSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Get approved cards (and edited cards which are also approved)
+    approved_cards = (
+        db.query(Card)
+        .filter(
+            Card.session_id == session_id,
+            Card.status.in_([CardStatus.APPROVED.value, CardStatus.EDITED.value]),
+        )
+        .all()
+    )
+
+    if not approved_cards:
+        raise HTTPException(status_code=400, detail="No approved cards to export")
+
+    # Get card IDs
+    card_ids = [card.id for card in approved_cards]
+
+    # Get all images for these cards
+    card_images = (
+        db.query(CardImage)
+        .filter(CardImage.card_id.in_(card_ids))
+        .all()
+    )
+
+    # Convert to dicts for the exporter
+    cards_data = [
+        {
+            "front": card.front,
+            "back": card.back,
+            "tags": card.tags if request.include_tags else [],
+        }
+        for card in approved_cards
+    ]
+
+    images_data = [
+        {
+            "original_filename": img.original_filename,
+            "stored_filename": img.stored_filename,
+        }
+        for img in card_images
+    ]
+
+    # Generate filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = Path(session.filename).stem
+    filename = f"{base_name}_{timestamp}_with_media.zip"
+    output_path = EXPORTS_DIR / filename
+
+    # Export using AnkiExporter
+    exporter = AnkiExporter(
+        config={"default_deck": request.deck_name or "Generated::Flashcards", "default_tags": []}
+    )
+
+    exporter.export_to_zip_with_media(
+        cards=cards_data,
+        card_images=images_data,
+        image_storage_dir=IMAGE_STORAGE_DIR,
+        output_path=output_path,
+        deck_name=request.deck_name,
+    )
+
+    return ExportWithMediaResponse(
+        filename=filename,
+        card_count=len(approved_cards),
+        image_count=len(card_images),
+        download_url=f"/api/v1/export/download/{filename}",
+    )
+
+
+@router.get("/download-zip/{filename}")
+async def download_zip_export(filename: str):
+    """Download an exported ZIP file."""
+    file_path = EXPORTS_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Export file not found")
+
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
+        media_type="application/zip",
+    )

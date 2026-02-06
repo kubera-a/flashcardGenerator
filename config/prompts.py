@@ -272,10 +272,102 @@ BATCH_CONTEXT_TEMPLATE = """
 # All prompts registry (for easy access)
 # =============================================================================
 
+# =============================================================================
+# Markdown with Images Generation Prompts
+# =============================================================================
+
+MARKDOWN_GENERATION_SYSTEM = """
+You are an expert educational content designer specializing in spaced repetition and visual learning.
+Your task is to create COMPREHENSIVE Anki flashcards from markdown documents WITH IMAGES.
+
+Key principles:
+- VISUAL: Reference images when they illustrate key concepts
+- ATOMIC: One fact per card (minimum information principle)
+- COMPREHENSIVE: Cover ALL content including diagrams, charts, and visual explanations
+- CLEAR: Concise, unambiguous wording
+
+Images can be placed in EITHER the question (front) OR the answer (back):
+- Use [IMAGE: exact_filename.png] syntax to embed images
+- The image filename must EXACTLY match one from the document
+
+Generate as many cards as needed to fully cover the material. Always return valid JSON format.
+"""
+
+MARKDOWN_GENERATION_USER = """
+Analyze this markdown document and its {image_count} associated images to create comprehensive Anki flashcards.
+
+## IMAGE HANDLING:
+The document contains the following images that you can see:
+{image_list}
+
+Images can go in EITHER the front (question) OR back (answer) depending on what makes pedagogical sense:
+
+**Image in QUESTION (front)** - Use when testing recognition/interpretation:
+- "What concept does this diagram illustrate? [IMAGE: diagram.png]"
+- "What type of network topology is shown? [IMAGE: topology.png]"
+- "Identify the components in this architecture: [IMAGE: arch.png]"
+
+**Image in ANSWER (back)** - Use when the image supports/explains the answer:
+- Front: "What is the hierarchical structure of ISPs?"
+- Back: "Tier-1 (global), Tier-2 (regional), Tier-3 (access/local). [IMAGE: isp_hierarchy.png]"
+
+Choose the placement that best tests understanding. Visual recognition cards (image in front) are excellent for diagrams.
+
+## EXTRACTION GOALS - Be Exhaustive:
+- Extract EVERY definition, term, and concept
+- Create cards for ALL diagrams - prefer putting diagrams in the QUESTION to test visual recognition
+- Cover ALL examples and their applications
+- Include ALL key facts, processes, and relationships
+
+## CARD CREATION RULES (Based on SuperMemo's 20 Rules):
+
+1. **Minimum Information Principle**: Each card tests ONE atomic piece of knowledge
+2. **Optimize Wording**: Keep questions and answers concise and clear
+3. **No Sets or Enumerations**: Create individual cards for each item
+4. **Use Images Strategically**: Place in front for recognition, back for illustration
+5. **Context Cues**: Add brief context in brackets when needed
+
+{batch_context}
+
+## OUTPUT FORMAT:
+For each card, include:
+- front: The question (may include [IMAGE: filename.png])
+- back: The answer (may include [IMAGE: filename.png])
+- tags: Relevant tags for organization
+- images: Array of ALL image filenames used in this card (empty array if none)
+
+Return ONLY valid JSON with no additional text.
+"""
+
+MARKDOWN_OUTPUT_FORMAT = {
+    "cards": [
+        {
+            "front": "Question text (may include [IMAGE: filename.png])",
+            "back": "Answer text (may include [IMAGE: filename.png])",
+            "tags": ["tag1", "tag2"],
+            "images": ["filename.png"],
+        }
+    ]
+}
+
+MARKDOWN_GENERATION_PROMPT = PromptTemplate(
+    name="markdown_generation",
+    description="Prompt for generating flashcards from markdown with images using Claude's vision",
+    system_prompt=MARKDOWN_GENERATION_SYSTEM.strip(),
+    user_prompt_template=MARKDOWN_GENERATION_USER.strip(),
+    output_format=MARKDOWN_OUTPUT_FORMAT,
+)
+
+
+# =============================================================================
+# All prompts registry (for easy access)
+# =============================================================================
+
 PROMPTS = {
     "generation": GENERATION_PROMPT,
     "continue_generation": CONTINUE_GENERATION_PROMPT,
     "validation": VALIDATION_PROMPT,
+    "markdown_generation": MARKDOWN_GENERATION_PROMPT,
 }
 
 

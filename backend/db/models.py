@@ -32,11 +32,18 @@ class CardStatus(str, PyEnum):
 
 class SessionStatus(str, PyEnum):
     """Status of a card generation session."""
+    PENDING = "pending"  # Uploaded but not started
     PROCESSING = "processing"
     READY = "ready"
     REVIEWING = "reviewing"
     FINALIZED = "finalized"
     FAILED = "failed"
+
+
+class SourceType(str, PyEnum):
+    """Type of source document."""
+    PDF = "pdf"
+    MARKDOWN = "markdown"
 
 
 class PromptType(str, PyEnum):
@@ -46,12 +53,15 @@ class PromptType(str, PyEnum):
 
 
 class Session(Base):
-    """Represents a PDF upload and card generation session."""
+    """Represents a PDF/markdown upload and card generation session."""
     __tablename__ = "sessions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     filename: Mapped[str] = mapped_column(String(255))
     file_path: Mapped[str] = mapped_column(String(500))
+    source_type: Mapped[str] = mapped_column(
+        String(50), default=SourceType.PDF.value
+    )
     pdf_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(
         String(50), default=SessionStatus.PROCESSING.value
@@ -95,6 +105,26 @@ class Card(Base):
     rejections: Mapped[list["CardRejection"]] = relationship(
         back_populates="card", cascade="all, delete-orphan"
     )
+    images: Mapped[list["CardImage"]] = relationship(
+        back_populates="card", cascade="all, delete-orphan"
+    )
+
+
+class CardImage(Base):
+    """Represents an image associated with a flashcard."""
+    __tablename__ = "card_images"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"))
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
+    original_filename: Mapped[str] = mapped_column(String(500))
+    stored_filename: Mapped[str] = mapped_column(String(500))
+    media_type: Mapped[str] = mapped_column(String(100), default="image/png")
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    card: Mapped["Card"] = relationship(back_populates="images")
 
 
 class CardRejection(Base):

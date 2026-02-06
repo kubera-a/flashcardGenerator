@@ -23,6 +23,12 @@ class RejectionType(str, Enum):
     OTHER = "other"
 
 
+class SourceType(str, Enum):
+    """Type of source document."""
+    PDF = "pdf"
+    MARKDOWN = "markdown"
+
+
 # Session schemas
 class SessionCreate(BaseModel):
     """Schema for creating a new session (used internally)."""
@@ -37,6 +43,7 @@ class SessionResponse(BaseModel):
     id: int
     filename: str
     status: str
+    source_type: str = "pdf"
     total_chunks: int
     processed_chunks: int
     llm_provider: str
@@ -76,6 +83,16 @@ class CardCreate(CardBase):
     chunk_index: int = 0
 
 
+class CardImageResponse(BaseModel):
+    """Schema for card image responses."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    original_filename: str
+    stored_filename: str
+    media_type: str = "image/png"
+
+
 class CardResponse(BaseModel):
     """Schema for card responses."""
     model_config = ConfigDict(from_attributes=True)
@@ -91,6 +108,7 @@ class CardResponse(BaseModel):
     chunk_index: int
     created_at: datetime
     reviewed_at: datetime | None = None
+    images: list[CardImageResponse] = []
 
 
 class CardEditRequest(BaseModel):
@@ -177,6 +195,14 @@ class ExportResponse(BaseModel):
     download_url: str
 
 
+class ExportWithMediaResponse(BaseModel):
+    """Schema for export with media files."""
+    filename: str
+    card_count: int
+    image_count: int
+    download_url: str
+
+
 # Batch operation schemas
 class BatchApproveRequest(BaseModel):
     """Schema for batch approve requests."""
@@ -235,3 +261,14 @@ class ContinueGenerationRequest(BaseModel):
     """Schema for continuing card generation after review."""
     focus_areas: str | None = None  # Optional user guidance on what to focus on
     page_indices: list[int] | None = None  # Optionally specify pages to re-process
+
+
+# Markdown upload schemas
+class MarkdownPreviewResponse(BaseModel):
+    """Schema for markdown preview response."""
+    session_id: int
+    filename: str
+    title: str | None = None
+    image_count: int
+    content_preview: str
+    images: list[str]  # List of image filenames

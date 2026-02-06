@@ -16,9 +16,10 @@ from sqlalchemy.orm import Session
 
 from backend.db.database import get_db
 from backend.db.models import Session as DBSession
-from backend.db.models import SessionStatus
+from backend.db.models import SessionStatus, SourceType
 from backend.db.schemas import (
     ContinueGenerationRequest,
+    MarkdownPreviewResponse,
     PDFChapter,
     PDFPageThumbnail,
     PDFPreviewResponse,
@@ -40,6 +41,7 @@ from backend.services.session_service import (
     create_session,
     finalize_session,
     get_session_stats,
+    process_markdown_and_generate_cards,
     process_pdf_and_generate_cards,
 )
 
@@ -47,6 +49,9 @@ router = APIRouter()
 
 UPLOAD_DIR = Path(__file__).parent.parent.parent.parent / "data" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+MARKDOWN_UPLOAD_DIR = Path(__file__).parent.parent.parent.parent / "data" / "markdown_uploads"
+MARKDOWN_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @router.post("/", response_model=SessionResponse)
@@ -156,6 +161,89 @@ async def upload_pdf_preview(
     )
 
 
+@router.post("/upload-markdown", response_model=MarkdownPreviewResponse)
+async def upload_markdown_preview(
+    file: UploadFile = File(...),
+    llm_provider: str = "anthropic",  # Default to anthropic for image support
+    db: Session = Depends(get_db),
+):
+    """
+    Upload a markdown folder (as ZIP) and get a preview.
+
+    The ZIP should contain:
+    - A markdown (.md) file
+    - An accompanying images folder
+
+    Note: Markdown with images requires Anthropic (Claude) provider for multimodal support.
+    """
+    import uuid
+
+    if not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only ZIP files are allowed for markdown upload")
+
+    if llm_provider != "anthropic":
+        raise HTTPException(
+            status_code=400,
+            detail="Markdown with images requires Anthropic (Claude) provider for multimodal support"
+        )
+
+    # Create unique directory for this upload
+    session_uuid = str(uuid.uuid4())
+    extract_dir = MARKDOWN_UPLOAD_DIR / session_uuid
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save ZIP file
+    zip_path = extract_dir / file.filename
+    with open(zip_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # Process markdown
+    from modules.markdown_processor import MarkdownProcessor
+
+    processor = MarkdownProcessor()
+    try:
+        doc = processor.process_zip(zip_path, extract_dir)
+    except ValueError as e:
+        # Clean up on failure
+        shutil.rmtree(extract_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        shutil.rmtree(extract_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=f"Failed to process ZIP: {str(e)}")
+
+    # Create session
+    session = create_session(
+        db=db,
+        filename=file.filename,
+        file_path=str(doc.source_path),
+        llm_provider=llm_provider,
+        source_type=SourceType.MARKDOWN.value,
+    )
+
+    # Store markdown metadata
+    existing_images = [img.relative_path for img in doc.images if img.exists]
+    session.pdf_metadata = {
+        "source_type": "markdown",
+        "title": doc.title,
+        "image_count": len(existing_images),
+        "images": existing_images,
+        "extract_dir": str(extract_dir),
+        "base_dir": str(doc.base_dir),
+    }
+    session.status = "pending"
+    db.commit()
+    db.refresh(session)
+
+    return MarkdownPreviewResponse(
+        session_id=session.id,
+        filename=file.filename,
+        title=doc.title,
+        image_count=len(existing_images),
+        content_preview=doc.content[:500] + ("..." if len(doc.content) > 500 else ""),
+        images=existing_images,
+    )
+
+
 @router.post("/{session_id}/start-generation", response_model=SessionResponse)
 async def start_generation(
     session_id: int,
@@ -177,35 +265,49 @@ async def start_generation(
     # Update session status
     session.status = SessionStatus.PROCESSING.value
 
-    # Determine page selection
-    selected_pages = request.page_indices
+    # Check if this is a markdown session
+    is_markdown = session.source_type == SourceType.MARKDOWN.value
 
-    # If chapters are specified, expand them to page indices
-    if request.chapter_indices is not None:
-        try:
-            selected_pages = get_pages_for_chapters(
-                session.file_path,
-                request.chapter_indices,
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+    if is_markdown:
+        # Markdown sessions don't use page selection
+        db.commit()
+        db.refresh(session)
 
-    # Store selection in pdf_metadata
-    session.pdf_metadata = session.pdf_metadata or {}
-    if selected_pages is not None:
-        session.pdf_metadata["selected_pages"] = selected_pages
-    if request.chapter_indices is not None:
-        session.pdf_metadata["selected_chapters"] = request.chapter_indices
-    session.pdf_metadata["use_native_pdf"] = request.use_native_pdf
+        # Start markdown processing
+        background_tasks.add_task(
+            process_markdown_and_generate_cards,
+            session_id=session.id,
+        )
+    else:
+        # PDF processing with page selection
+        selected_pages = request.page_indices
 
-    db.commit()
-    db.refresh(session)
+        # If chapters are specified, expand them to page indices
+        if request.chapter_indices is not None:
+            try:
+                selected_pages = get_pages_for_chapters(
+                    session.file_path,
+                    request.chapter_indices,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
 
-    # Start background processing
-    background_tasks.add_task(
-        process_pdf_and_generate_cards,
-        session_id=session.id,
-    )
+        # Store selection in pdf_metadata
+        session.pdf_metadata = session.pdf_metadata or {}
+        if selected_pages is not None:
+            session.pdf_metadata["selected_pages"] = selected_pages
+        if request.chapter_indices is not None:
+            session.pdf_metadata["selected_chapters"] = request.chapter_indices
+        session.pdf_metadata["use_native_pdf"] = request.use_native_pdf
+
+        db.commit()
+        db.refresh(session)
+
+        # Start PDF processing
+        background_tasks.add_task(
+            process_pdf_and_generate_cards,
+            session_id=session.id,
+        )
 
     return session
 
@@ -298,6 +400,7 @@ async def list_sessions(db: Session = Depends(get_db)):
                 id=session.id,
                 filename=session.filename,
                 status=session.status,
+                source_type=session.source_type,
                 total_chunks=session.total_chunks,
                 processed_chunks=session.processed_chunks,
                 llm_provider=session.llm_provider,
@@ -322,6 +425,7 @@ async def get_session(session_id: int, db: Session = Depends(get_db)):
         id=session.id,
         filename=session.filename,
         status=session.status,
+        source_type=session.source_type,
         total_chunks=session.total_chunks,
         processed_chunks=session.processed_chunks,
         llm_provider=session.llm_provider,
@@ -381,6 +485,7 @@ async def finalize_session_endpoint(
         id=session.id,
         filename=session.filename,
         status=session.status,
+        source_type=session.source_type,
         total_chunks=session.total_chunks,
         processed_chunks=session.processed_chunks,
         llm_provider=session.llm_provider,

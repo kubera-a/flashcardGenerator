@@ -2,27 +2,40 @@ import { useState, useCallback } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { sessionsApi } from '../api/client';
-import type { PDFPreviewResponse, PDFPageThumbnail } from '../types';
+import type { PDFPreviewResponse, PDFPageThumbnail, MarkdownPreviewResponse } from '../types';
 
 type UploadStep = 'upload' | 'preview' | 'generating';
+type FileType = 'pdf' | 'markdown';
 
 export default function UploadPage() {
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
+  const [fileType, setFileType] = useState<FileType>('pdf');
   const [llmProvider, setLlmProvider] = useState('anthropic');
   const [isDragging, setIsDragging] = useState(false);
   const [step, setStep] = useState<UploadStep>('upload');
-  const [preview, setPreview] = useState<PDFPreviewResponse | null>(null);
+  const [pdfPreview, setPdfPreview] = useState<PDFPreviewResponse | null>(null);
+  const [markdownPreview, setMarkdownPreview] = useState<MarkdownPreviewResponse | null>(null);
   const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
   const [useNativePdf, setUseNativePdf] = useState(true);
 
-  const uploadPreviewMutation = useMutation({
+  // PDF upload preview
+  const uploadPdfPreviewMutation = useMutation({
     mutationFn: (file: File) => sessionsApi.uploadPreview(file, llmProvider, true),
     onSuccess: (response) => {
       const previewData = response.data as PDFPreviewResponse;
-      setPreview(previewData);
-      // Select all pages by default
+      setPdfPreview(previewData);
       setSelectedPages(new Set(Array.from({ length: previewData.page_count }, (_, i) => i)));
+      setStep('preview');
+    },
+  });
+
+  // Markdown upload preview
+  const uploadMarkdownPreviewMutation = useMutation({
+    mutationFn: (file: File) => sessionsApi.uploadMarkdownPreview(file, 'anthropic'),
+    onSuccess: (response) => {
+      const previewData = response.data as MarkdownPreviewResponse;
+      setMarkdownPreview(previewData);
       setStep('preview');
     },
   });
@@ -43,12 +56,25 @@ export default function UploadPage() {
     },
   });
 
+  const detectFileType = (file: File): FileType => {
+    const extension = file.name.toLowerCase().split('.').pop();
+    if (extension === 'zip') return 'markdown';
+    return 'pdf';
+  };
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
     const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile?.type === 'application/pdf') {
+    if (droppedFile) {
+      const type = detectFileType(droppedFile);
+      if (type === 'pdf' && droppedFile.type !== 'application/pdf') return;
       setFile(droppedFile);
+      setFileType(type);
+      // Force anthropic for markdown
+      if (type === 'markdown') {
+        setLlmProvider('anthropic');
+      }
     }
   }, []);
 
@@ -65,30 +91,46 @@ export default function UploadPage() {
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
+      const type = detectFileType(selectedFile);
       setFile(selectedFile);
+      setFileType(type);
+      // Force anthropic for markdown
+      if (type === 'markdown') {
+        setLlmProvider('anthropic');
+      }
     }
   };
 
   const handleUploadPreview = () => {
     if (file) {
-      uploadPreviewMutation.mutate(file);
+      if (fileType === 'markdown') {
+        uploadMarkdownPreviewMutation.mutate(file);
+      } else {
+        uploadPdfPreviewMutation.mutate(file);
+      }
     }
   };
 
   const handleQuickUpload = () => {
-    if (file) {
+    if (file && fileType === 'pdf') {
       uploadMutation.mutate(file);
     }
   };
 
   const handleStartGeneration = () => {
-    if (preview) {
-      const pageIndices = selectedPages.size === preview.page_count
-        ? null  // Use all pages
+    if (fileType === 'markdown' && markdownPreview) {
+      startGenerationMutation.mutate({
+        sessionId: markdownPreview.session_id,
+        pageIndices: null,
+        useNativePdf: false,
+      });
+    } else if (pdfPreview) {
+      const pageIndices = selectedPages.size === pdfPreview.page_count
+        ? null
         : Array.from(selectedPages).sort((a, b) => a - b);
 
       startGenerationMutation.mutate({
-        sessionId: preview.session_id,
+        sessionId: pdfPreview.session_id,
         pageIndices,
         useNativePdf,
       });
@@ -106,8 +148,8 @@ export default function UploadPage() {
   };
 
   const selectAllPages = () => {
-    if (preview) {
-      setSelectedPages(new Set(Array.from({ length: preview.page_count }, (_, i) => i)));
+    if (pdfPreview) {
+      setSelectedPages(new Set(Array.from({ length: pdfPreview.page_count }, (_, i) => i)));
     }
   };
 
@@ -117,11 +159,76 @@ export default function UploadPage() {
 
   const handleBack = () => {
     setStep('upload');
-    setPreview(null);
+    setPdfPreview(null);
+    setMarkdownPreview(null);
     setSelectedPages(new Set());
   };
 
-  if (step === 'preview' && preview) {
+  // Markdown preview step
+  if (step === 'preview' && markdownPreview) {
+    return (
+      <div className="upload-page">
+        <div className="preview-header">
+          <button className="btn btn-secondary" onClick={handleBack}>
+            &larr; Back
+          </button>
+          <h2>Markdown Preview</h2>
+        </div>
+
+        <div className="pdf-info">
+          <p><strong>File:</strong> {markdownPreview.filename}</p>
+          {markdownPreview.title && <p><strong>Title:</strong> {markdownPreview.title}</p>}
+          <p><strong>Images:</strong> {markdownPreview.image_count}</p>
+        </div>
+
+        <div className="markdown-preview-content">
+          <h3>Content Preview:</h3>
+          <pre className="content-preview">{markdownPreview.content_preview}</pre>
+        </div>
+
+        {markdownPreview.images.length > 0 && (
+          <div className="image-list">
+            <h3>Images ({markdownPreview.images.length}):</h3>
+            <ul>
+              {markdownPreview.images.slice(0, 10).map((img, idx) => (
+                <li key={idx}>{img}</li>
+              ))}
+              {markdownPreview.images.length > 10 && (
+                <li>... and {markdownPreview.images.length - 10} more</li>
+              )}
+            </ul>
+          </div>
+        )}
+
+        <div className="generation-options">
+          <p className="info-text">
+            Markdown with images requires Claude (Anthropic) for multimodal processing.
+          </p>
+        </div>
+
+        <div className="upload-actions">
+          <button
+            className="btn btn-primary btn-large"
+            onClick={handleStartGeneration}
+            disabled={startGenerationMutation.isPending}
+          >
+            {startGenerationMutation.isPending
+              ? 'Starting...'
+              : `Generate Cards from Markdown`}
+          </button>
+        </div>
+
+        {startGenerationMutation.isError && (
+          <div className="error-message">
+            Error starting generation: {String(startGenerationMutation.error)}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // PDF preview step
+  if (step === 'preview' && pdfPreview) {
     return (
       <div className="upload-page">
         <div className="preview-header">
@@ -132,11 +239,11 @@ export default function UploadPage() {
         </div>
 
         <div className="pdf-info">
-          <p><strong>File:</strong> {preview.filename}</p>
-          <p><strong>Pages:</strong> {preview.page_count}</p>
-          <p><strong>Size:</strong> {(preview.file_size / 1024 / 1024).toFixed(2)} MB</p>
-          {preview.title && <p><strong>Title:</strong> {preview.title}</p>}
-          {preview.author && <p><strong>Author:</strong> {preview.author}</p>}
+          <p><strong>File:</strong> {pdfPreview.filename}</p>
+          <p><strong>Pages:</strong> {pdfPreview.page_count}</p>
+          <p><strong>Size:</strong> {(pdfPreview.file_size / 1024 / 1024).toFixed(2)} MB</p>
+          {pdfPreview.title && <p><strong>Title:</strong> {pdfPreview.title}</p>}
+          {pdfPreview.author && <p><strong>Author:</strong> {pdfPreview.author}</p>}
         </div>
 
         <div className="page-selection-controls">
@@ -147,12 +254,12 @@ export default function UploadPage() {
             Deselect All
           </button>
           <span className="selected-count">
-            {selectedPages.size} of {preview.page_count} pages selected
+            {selectedPages.size} of {pdfPreview.page_count} pages selected
           </span>
         </div>
 
         <div className="page-grid">
-          {preview.thumbnails.map((thumb: PDFPageThumbnail) => (
+          {pdfPreview.thumbnails.map((thumb: PDFPageThumbnail) => (
             <div
               key={thumb.page_index}
               className={`page-thumbnail ${selectedPages.has(thumb.page_index) ? 'selected' : ''}`}
@@ -219,12 +326,16 @@ export default function UploadPage() {
     );
   }
 
+  const isLoading = uploadPdfPreviewMutation.isPending || uploadMarkdownPreviewMutation.isPending;
+  const hasError = uploadPdfPreviewMutation.isError || uploadMarkdownPreviewMutation.isError || uploadMutation.isError;
+  const errorMessage = uploadPdfPreviewMutation.error || uploadMarkdownPreviewMutation.error || uploadMutation.error;
+
   return (
     <div className="upload-page">
-      <h2>Upload PDF</h2>
+      <h2>Upload Document</h2>
       <p className="upload-description">
-        Upload a PDF document to generate Anki flashcards. You can select which
-        pages to process and choose your preferred LLM provider.
+        Upload a PDF document or a ZIP file containing markdown with images.
+        For markdown, create a ZIP with your .md file and an images folder.
       </p>
 
       <div
@@ -235,14 +346,20 @@ export default function UploadPage() {
       >
         {file ? (
           <div className="file-info">
-            <span className="file-icon">📄</span>
+            <span className="file-icon">{fileType === 'markdown' ? '📝' : '📄'}</span>
             <span className="file-name">{file.name}</span>
             <span className="file-size">
               ({(file.size / 1024 / 1024).toFixed(2)} MB)
             </span>
+            <span className="file-type-badge">
+              {fileType === 'markdown' ? 'Markdown ZIP' : 'PDF'}
+            </span>
             <button
               className="btn btn-small"
-              onClick={() => setFile(null)}
+              onClick={() => {
+                setFile(null);
+                setFileType('pdf');
+              }}
             >
               Remove
             </button>
@@ -250,10 +367,13 @@ export default function UploadPage() {
         ) : (
           <>
             <span className="upload-icon">📁</span>
-            <p>Drag and drop a PDF here, or click to select</p>
+            <p>Drag and drop a PDF or ZIP file here, or click to select</p>
+            <p className="upload-hint">
+              PDF for documents, ZIP for markdown with images
+            </p>
             <input
               type="file"
-              accept=".pdf"
+              accept=".pdf,.zip"
               onChange={handleFileSelect}
               className="file-input"
             />
@@ -268,33 +388,41 @@ export default function UploadPage() {
             value={llmProvider}
             onChange={(e) => setLlmProvider(e.target.value)}
             className="select-input"
+            disabled={fileType === 'markdown'}
           >
             <option value="anthropic">Anthropic (Claude) - Native PDF</option>
             <option value="openai">OpenAI (GPT-4) - Text Extraction</option>
           </select>
         </label>
+        {fileType === 'markdown' && (
+          <p className="info-text">
+            Markdown with images requires Claude (Anthropic) for multimodal processing.
+          </p>
+        )}
       </div>
 
       <div className="upload-actions">
         <button
           className="btn btn-primary btn-large"
           onClick={handleUploadPreview}
-          disabled={!file || uploadPreviewMutation.isPending}
+          disabled={!file || isLoading}
         >
-          {uploadPreviewMutation.isPending ? 'Loading Preview...' : 'Select Pages'}
+          {isLoading ? 'Loading Preview...' : fileType === 'markdown' ? 'Preview Markdown' : 'Select Pages'}
         </button>
-        <button
-          className="btn btn-secondary btn-large"
-          onClick={handleQuickUpload}
-          disabled={!file || uploadMutation.isPending}
-        >
-          {uploadMutation.isPending ? 'Uploading...' : 'Quick Generate (All Pages)'}
-        </button>
+        {fileType === 'pdf' && (
+          <button
+            className="btn btn-secondary btn-large"
+            onClick={handleQuickUpload}
+            disabled={!file || uploadMutation.isPending}
+          >
+            {uploadMutation.isPending ? 'Uploading...' : 'Quick Generate (All Pages)'}
+          </button>
+        )}
       </div>
 
-      {(uploadPreviewMutation.isError || uploadMutation.isError) && (
+      {hasError && (
         <div className="error-message">
-          Error uploading file: {String(uploadPreviewMutation.error || uploadMutation.error)}
+          Error uploading file: {String(errorMessage)}
         </div>
       )}
     </div>

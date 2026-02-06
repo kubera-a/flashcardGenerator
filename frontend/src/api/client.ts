@@ -22,11 +22,19 @@ export const sessionsApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
-  // Upload with preview (for page selection)
+  // Upload PDF with preview (for page selection)
   uploadPreview: async (file: File, llmProvider: string = 'openai', generateThumbnails: boolean = true) => {
     const formData = new FormData();
     formData.append('file', file);
     return api.post(`/sessions/upload-preview?llm_provider=${llmProvider}&generate_thumbnails=${generateThumbnails}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  // Upload markdown ZIP with preview
+  uploadMarkdownPreview: async (file: File, llmProvider: string = 'anthropic') => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post(`/sessions/upload-markdown?llm_provider=${llmProvider}`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
@@ -92,5 +100,18 @@ export const exportApi = {
       include_tags: includeTags,
       deck_name: deckName,
     }),
+  exportSessionWithMedia: (sessionId: number, deckName?: string, includeTags: boolean = true) =>
+    api.post(`/export/session/${sessionId}/with-media`, {
+      include_tags: includeTags,
+      deck_name: deckName,
+    }),
   list: () => api.get('/export/list'),
+};
+
+// Images API
+export const imagesApi = {
+  getImageUrl: (sessionId: number, filename: string) =>
+    `${API_BASE_URL}/images/${sessionId}/${filename}`,
+  getOriginalImageUrl: (sessionId: number, filename: string) =>
+    `${API_BASE_URL}/images/${sessionId}/original/${encodeURIComponent(filename)}`,
 };
