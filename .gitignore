@@ -155,6 +155,11 @@ data/input/*
 data/exports/*
 !data/exports/.gitkeep
 
+# Legacy data directories (pre-migration paths)
+data/card_images/
+data/markdown_uploads/
+data/uploads/
+
 # Legacy directories (can be removed after migration)
 output/
 

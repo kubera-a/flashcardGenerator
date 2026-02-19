@@ -44,7 +44,7 @@ from backend.services.session_service import (
     process_markdown_and_generate_cards,
     process_pdf_and_generate_cards,
 )
-from config.settings import EXTRACTIONS_DIR, UPLOADS_DIR
+from config.settings import CARD_IMAGES_DIR, EXPORTS_DIR, EXTRACTIONS_DIR, UPLOADS_DIR
 
 router = APIRouter()
 
@@ -497,7 +497,7 @@ async def finalize_session_endpoint(
 
 @router.delete("/{session_id}")
 async def delete_session(session_id: int, db: Session = Depends(get_db)):
-    """Delete a session and all its cards."""
+    """Delete a session and all its cards, including associated files."""
     session = db.query(DBSession).filter(DBSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -506,6 +506,28 @@ async def delete_session(session_id: int, db: Session = Depends(get_db)):
     file_path = Path(session.file_path)
     if file_path.exists():
         file_path.unlink()
+
+    # Delete card images for this session (prefixed with session_id_)
+    for img_file in CARD_IMAGES_DIR.glob(f"{session_id}_*"):
+        img_file.unlink()
+
+    # Delete export files that match this session's source filename
+    if session.filename:
+        stem = Path(session.filename).stem
+        for export_file in EXPORTS_DIR.glob(f"{stem}_*"):
+            export_file.unlink()
+
+    # Delete markdown extraction directory for this session
+    if session.source_type == SourceType.MARKDOWN.value:
+        # file_path points to the .md inside EXTRACTIONS_DIR/<uuid>/...
+        # Walk up to find the UUID directory directly under EXTRACTIONS_DIR
+        try:
+            relative = file_path.relative_to(EXTRACTIONS_DIR)
+            session_extract_dir = EXTRACTIONS_DIR / relative.parts[0]
+            if session_extract_dir.exists():
+                shutil.rmtree(session_extract_dir)
+        except ValueError:
+            pass  # file_path not under EXTRACTIONS_DIR, skip
 
     # Delete session (cascades to cards)
     db.delete(session)
