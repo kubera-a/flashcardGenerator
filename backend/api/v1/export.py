@@ -11,15 +11,14 @@ from backend.db.database import get_db
 from backend.db.models import Card, CardImage, CardStatus
 from backend.db.models import Session as DBSession
 from backend.db.schemas import ExportRequest, ExportResponse, ExportWithMediaResponse
+from config.settings import CARD_IMAGES_DIR, EXPORTS_DIR
 from modules.anki_integration import AnkiExporter
 from modules.card_generation import FlashCard
 
 router = APIRouter()
 
-EXPORTS_DIR = Path(__file__).parent.parent.parent.parent / "data" / "exports"
-EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
-
-IMAGE_STORAGE_DIR = Path(__file__).parent.parent.parent.parent / "data" / "card_images"
+# Use centralized path from config
+IMAGE_STORAGE_DIR = CARD_IMAGES_DIR
 
 
 @router.post("/session/{session_id}", response_model=ExportResponse)

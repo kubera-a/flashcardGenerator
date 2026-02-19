@@ -28,15 +28,13 @@ from config.prompts import (
     GENERATION_PROMPT,
     MARKDOWN_GENERATION_PROMPT,
 )
+from config.settings import CARD_IMAGES_DIR
 from modules.card_generation import CardGenerator
 from modules.llm_interface import LLMInterface
 from modules.markdown_processor import MarkdownProcessor
 from modules.pdf_processor import PDFProcessor
 
 logger = logging.getLogger(__name__)
-
-UPLOAD_DIR = Path(__file__).parent.parent.parent / "data" / "uploads"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def create_session(
@@ -613,9 +611,8 @@ def process_markdown_and_generate_cards(
         # Create image filename mapping for storage
         image_mapping = processor.get_image_mapping(doc, session.id)
 
-        # Define image storage directory
-        image_storage_dir = Path(__file__).parent.parent.parent / "data" / "card_images"
-        image_storage_dir.mkdir(parents=True, exist_ok=True)
+        # Use centralized image storage directory
+        image_storage_dir = CARD_IMAGES_DIR
 
         # Copy images to storage with session-prefixed names
         processor.copy_images_to_storage(doc, image_mapping, image_storage_dir)

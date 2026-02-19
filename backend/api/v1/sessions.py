@@ -44,14 +44,13 @@ from backend.services.session_service import (
     process_markdown_and_generate_cards,
     process_pdf_and_generate_cards,
 )
+from config.settings import EXTRACTIONS_DIR, UPLOADS_DIR
 
 router = APIRouter()
 
-UPLOAD_DIR = Path(__file__).parent.parent.parent.parent / "data" / "uploads"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-MARKDOWN_UPLOAD_DIR = Path(__file__).parent.parent.parent.parent / "data" / "markdown_uploads"
-MARKDOWN_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# Use centralized paths from config
+UPLOAD_DIR = UPLOADS_DIR
+MARKDOWN_UPLOAD_DIR = EXTRACTIONS_DIR
 
 
 @router.post("/", response_model=SessionResponse)

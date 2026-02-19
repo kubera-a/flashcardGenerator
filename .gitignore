@@ -138,11 +138,25 @@ ENV/
 env.bak/
 venv.bak/
 
-# Application data (uploads, database, exports)
-data/
+# Application data directories
 logs/
 *.db
 *.sqlite
+
+# Data directory - ignore processing internals but keep structure
+data/.processing/
+data/flashcards.db
+
+# Keep input and exports folders (but not their contents)
+# Users place documents in data/input/
+# Exported files appear in data/exports/
+data/input/*
+!data/input/.gitkeep
+data/exports/*
+!data/exports/.gitkeep
+
+# Legacy directories (can be removed after migration)
+output/
 
 # Spyder project settings
 .spyderproject

@@ -1,14 +1,13 @@
 """Database configuration and session management."""
 
 from collections.abc import Generator
-from pathlib import Path
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from config.settings import DATA_DIR
+
 # Database path
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
-DATA_DIR.mkdir(exist_ok=True)
 DATABASE_URL = f"sqlite:///{DATA_DIR / 'flashcards.db'}"
 
 # Create engine

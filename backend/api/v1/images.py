@@ -8,11 +8,12 @@ from sqlalchemy.orm import Session
 
 from backend.db.database import get_db
 from backend.db.models import Session as DBSession
+from config.settings import CARD_IMAGES_DIR
 
 router = APIRouter()
 
-# Image storage directory
-IMAGE_STORAGE_DIR = Path(__file__).parent.parent.parent.parent / "data" / "card_images"
+# Use centralized path from config
+IMAGE_STORAGE_DIR = CARD_IMAGES_DIR
 
 
 @router.get("/{session_id}/{filename}")

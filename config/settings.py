@@ -16,14 +16,28 @@ try:
 except ImportError:
     pass  # dotenv not installed, using os.environ directly
 
-# Base directories
+# Base directories - can be overridden via environment variables
 ROOT_DIR = Path(__file__).parent.parent
-DATA_DIR = ROOT_DIR / "data"
-OUTPUT_DIR = ROOT_DIR / "output"
+DATA_DIR = Path(os.getenv("FLASHCARD_DATA_DIR", ROOT_DIR / "data"))
+
+# User-facing directories (intuitive names)
+# - INPUT_DIR: Place documents here (PDFs, markdown ZIPs)
+# - EXPORTS_DIR: Exported Anki files appear here
+INPUT_DIR = Path(os.getenv("FLASHCARD_INPUT_DIR", DATA_DIR / "input"))
+EXPORTS_DIR = Path(os.getenv("FLASHCARD_EXPORTS_DIR", DATA_DIR / "exports"))
+
+# Internal processing directories (hidden from user)
+PROCESSING_DIR = DATA_DIR / ".processing"
+UPLOADS_DIR = PROCESSING_DIR / "uploads"           # Temp storage for uploaded files
+EXTRACTIONS_DIR = PROCESSING_DIR / "extractions"   # Extracted markdown/PDF content
+CARD_IMAGES_DIR = PROCESSING_DIR / "images"        # Stored card images
+
+# Legacy alias for backwards compatibility
+OUTPUT_DIR = EXPORTS_DIR
 
 # Create directories if they don't exist
-DATA_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+for directory in [DATA_DIR, INPUT_DIR, EXPORTS_DIR, PROCESSING_DIR, UPLOADS_DIR, EXTRACTIONS_DIR, CARD_IMAGES_DIR]:
+    directory.mkdir(parents=True, exist_ok=True)
 
 # API Configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
