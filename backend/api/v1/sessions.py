@@ -44,7 +44,13 @@ from backend.services.session_service import (
     process_markdown_and_generate_cards,
     process_pdf_and_generate_cards,
 )
-from config.settings import CARD_IMAGES_DIR, EXPORTS_DIR, EXTRACTIONS_DIR, UPLOADS_DIR
+from config.settings import (
+    CARD_IMAGES_DIR,
+    DATA_DIR,
+    EXPORTS_DIR,
+    EXTRACTIONS_DIR,
+    UPLOADS_DIR,
+)
 
 router = APIRouter()
 
@@ -508,8 +514,11 @@ async def delete_session(session_id: int, db: Session = Depends(get_db)):
         file_path.unlink()
 
     # Delete card images for this session (prefixed with session_id_)
-    for img_file in CARD_IMAGES_DIR.glob(f"{session_id}_*"):
-        img_file.unlink()
+    # Check both new (.processing/images) and legacy (card_images) paths
+    for img_dir in [CARD_IMAGES_DIR, DATA_DIR / "card_images"]:
+        if img_dir.exists():
+            for img_file in img_dir.glob(f"{session_id}_*"):
+                img_file.unlink()
 
     # Delete export files that match this session's source filename
     if session.filename:
@@ -519,15 +528,16 @@ async def delete_session(session_id: int, db: Session = Depends(get_db)):
 
     # Delete markdown extraction directory for this session
     if session.source_type == SourceType.MARKDOWN.value:
-        # file_path points to the .md inside EXTRACTIONS_DIR/<uuid>/...
-        # Walk up to find the UUID directory directly under EXTRACTIONS_DIR
-        try:
-            relative = file_path.relative_to(EXTRACTIONS_DIR)
-            session_extract_dir = EXTRACTIONS_DIR / relative.parts[0]
-            if session_extract_dir.exists():
-                shutil.rmtree(session_extract_dir)
-        except ValueError:
-            pass  # file_path not under EXTRACTIONS_DIR, skip
+        # file_path points to the .md inside an extraction dir/<uuid>/...
+        # Check both new and legacy extraction paths
+        for extractions_base in [EXTRACTIONS_DIR, DATA_DIR / "markdown_uploads"]:
+            try:
+                relative = file_path.relative_to(extractions_base)
+                session_extract_dir = extractions_base / relative.parts[0]
+                if session_extract_dir.exists():
+                    shutil.rmtree(session_extract_dir)
+            except ValueError:
+                continue
 
     # Delete session (cascades to cards)
     db.delete(session)
