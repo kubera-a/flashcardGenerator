@@ -22,6 +22,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "aiofiles>=23.2.1",
     "pdf2image>=1.16.0",
+    "pymupdf>=1.24.0",
 ]
 
 [tool.ruff]

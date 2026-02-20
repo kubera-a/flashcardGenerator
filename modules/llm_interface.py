@@ -232,34 +232,59 @@ class LLMInterface:
         pdf_data: str,
         prompt: str,
         system_prompt: str,
+        images: list[tuple[str, str]] | None = None,
         **kwargs,
     ) -> str:
-        """Call the Anthropic API with a PDF document."""
+        """
+        Call the Anthropic API with a PDF document and optional images.
+
+        Args:
+            pdf_data: Base64-encoded PDF data
+            prompt: The text prompt
+            system_prompt: The system prompt
+            images: Optional list of (base64_data, media_type) tuples for
+                    extracted images to send alongside the PDF
+            **kwargs: Additional parameters
+        """
         params = {**self.config, **kwargs}
+
+        # Build content: PDF first, then individual images, then text prompt
+        content = [
+            {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": pdf_data,
+                },
+            },
+        ]
+
+        if images:
+            for img_data, media_type in images:
+                content.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": img_data,
+                        },
+                    }
+                )
+
+        content.append(
+            {
+                "type": "text",
+                "text": prompt,
+            }
+        )
 
         try:
             response = self.client.messages.create(
                 model=params.get("model", "claude-sonnet-4-5-20250514"),
                 system=system_prompt,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "document",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "application/pdf",
-                                    "data": pdf_data,
-                                },
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt,
-                            },
-                        ],
-                    }
-                ],
+                messages=[{"role": "user", "content": content}],
                 temperature=params.get("temperature", 0.3),
                 max_tokens=params.get("max_tokens", 4096),
                 timeout=httpx.Timeout(600.0, connect=5.0),
@@ -270,7 +295,9 @@ class LLMInterface:
             if "rate limit" in str(e).lower():
                 logger.info("Rate limit hit, backing off and retrying...")
                 time.sleep(5)
-                return self._call_anthropic_with_pdf(pdf_data, prompt, system_prompt, **kwargs)
+                return self._call_anthropic_with_pdf(
+                    pdf_data, prompt, system_prompt, images=images, **kwargs
+                )
             raise
 
     def generate_from_pdf(
@@ -279,6 +306,7 @@ class LLMInterface:
         prompt: str,
         system_prompt: str = "You are a helpful assistant.",
         page_indices: list[int] | None = None,
+        images: list[tuple[str, str]] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -294,6 +322,8 @@ class LLMInterface:
             system_prompt: The system prompt for context
             page_indices: Optional list of 0-based page indices to process.
                          If None, all pages are processed.
+            images: Optional list of (base64_data, media_type) tuples for
+                    extracted images to send alongside the PDF
             **kwargs: Additional parameters to pass to the provider
 
         Returns:
@@ -304,7 +334,9 @@ class LLMInterface:
         if self.supports_native_pdf():
             # Use native PDF support for Anthropic
             pdf_data = self._encode_pdf_to_base64(pdf_path)
-            return self._call_anthropic_with_pdf(pdf_data, prompt, system_prompt, **kwargs)
+            return self._call_anthropic_with_pdf(
+                pdf_data, prompt, system_prompt, images=images, **kwargs
+            )
         else:
             # Fall back to text extraction for other providers
             from modules.pdf_processor import PDFProcessor
@@ -333,6 +365,7 @@ class LLMInterface:
         output_format: dict,
         system_prompt: str = "You are a helpful assistant that outputs structured JSON.",
         page_indices: list[int] | None = None,
+        images: list[tuple[str, str]] | None = None,
         **kwargs,
     ) -> dict:
         """
@@ -344,6 +377,8 @@ class LLMInterface:
             output_format: Dictionary specifying the expected output format
             system_prompt: The system prompt for context
             page_indices: Optional list of 0-based page indices to process
+            images: Optional list of (base64_data, media_type) tuples for
+                    extracted images to send alongside the PDF
             **kwargs: Additional parameters to pass to the provider
 
         Returns:
@@ -372,6 +407,7 @@ class LLMInterface:
                     prompt=enhanced_prompt,
                     system_prompt=enhanced_system_prompt,
                     page_indices=page_indices,
+                    images=images,
                     **kwargs,
                 )
 

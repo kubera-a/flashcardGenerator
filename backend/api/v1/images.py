@@ -115,7 +115,38 @@ async def get_original_image(
     base_dir = metadata.get("base_dir")
 
     if not base_dir:
-        raise HTTPException(status_code=404, detail="Session has no image directory")
+        # No base_dir (e.g. PDF sessions) — look up CardImage and serve from storage
+        card_image = db.query(CardImage).filter(
+            CardImage.session_id == session_id,
+            CardImage.original_filename == filename,
+        ).first()
+
+        if not card_image:
+            # Try matching just the basename
+            card_image = db.query(CardImage).filter(
+                CardImage.session_id == session_id,
+                CardImage.original_filename == Path(filename).name,
+            ).first()
+
+        if card_image:
+            image_path = IMAGE_STORAGE_DIR / card_image.stored_filename
+            if image_path.exists():
+                suffix = image_path.suffix.lower()
+                media_types = {
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".gif": "image/gif",
+                    ".webp": "image/webp",
+                }
+                media_type = media_types.get(suffix, "application/octet-stream")
+                return FileResponse(
+                    path=image_path,
+                    media_type=media_type,
+                    filename=Path(filename).name,
+                )
+
+        raise HTTPException(status_code=404, detail="Image not found")
 
     # Look for image in the base directory
     image_path = Path(base_dir) / filename

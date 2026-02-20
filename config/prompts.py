@@ -166,6 +166,31 @@ MARKDOWN_OUTPUT_FORMAT = {
     ]
 }
 
+# =============================================================================
+# PDF Image Handling Add-on (prepended to user prompt for PDFs with images)
+# =============================================================================
+
+PDF_IMAGE_HANDLING_SECTION = """
+## IMAGE HANDLING:
+Images have been extracted from this PDF and are provided above as individual images, in the following order:
+{image_list}
+
+The images above appear in the same order as listed. Use the filenames exactly as shown when referencing them.
+
+Images can go in EITHER the front (question) OR back (answer) depending on what makes pedagogical sense:
+
+**Image in QUESTION (front)** - Use when testing recognition/interpretation:
+- "What concept does this diagram illustrate? [IMAGE: page3_img0.png]"
+- "Identify the components shown: [IMAGE: page5_img1.png]"
+
+**Image in ANSWER (back)** - Use when the image supports/explains the answer:
+- Front: "What is the structure of X?"
+- Back: "Description here. [IMAGE: page7_img0.png]"
+
+Reference images using [IMAGE: filename] format. Only reference images from the list above.
+For the output format, include an "images" array listing ALL image filenames used in each card (empty array if none).
+"""
+
 
 # =============================================================================
 # Continue Generation Prompts (for generating additional cards)
@@ -284,6 +309,15 @@ VALIDATION_PROMPT = PromptTemplate(
     output_format=VALIDATION_OUTPUT_FORMAT,
 )
 
+# PDF image prompt = same system + base user prompt with PDF image section prepended
+PDF_GENERATION_PROMPT = PromptTemplate(
+    name="pdf_generation",
+    description="Same generation prompt with PDF image handling section for PDFs with extracted images",
+    system_prompt=CARD_GENERATION_SYSTEM.strip(),
+    user_prompt_template=(PDF_IMAGE_HANDLING_SECTION + "\n" + CARD_GENERATION_USER).strip(),
+    output_format=MARKDOWN_OUTPUT_FORMAT,
+)
+
 # Markdown prompt = same system + base user prompt with image section prepended
 MARKDOWN_GENERATION_PROMPT = PromptTemplate(
     name="markdown_generation",
@@ -302,6 +336,7 @@ PROMPTS = {
     "generation": GENERATION_PROMPT,
     "continue_generation": CONTINUE_GENERATION_PROMPT,
     "validation": VALIDATION_PROMPT,
+    "pdf_generation": PDF_GENERATION_PROMPT,
     "markdown_generation": MARKDOWN_GENERATION_PROMPT,
 }
 

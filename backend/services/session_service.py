@@ -1,5 +1,6 @@
 """Service for managing card generation sessions."""
 
+import base64
 import logging
 import re
 from datetime import datetime
@@ -28,10 +29,16 @@ from config.prompts import (
     CONTINUE_GENERATION_PROMPT,
     GENERATION_PROMPT,
     MARKDOWN_GENERATION_PROMPT,
+    PDF_GENERATION_PROMPT,
 )
 from config.settings import CARD_IMAGES_DIR, CHUNK_SIZE, sanitize_filename
 from modules.llm_interface import LLMInterface
 from modules.markdown_processor import MarkdownProcessor
+from modules.pdf_image_extractor import (
+    extract_images_from_pdf,
+    get_images_for_pages,
+    save_pdf_images,
+)
 from modules.pdf_processor import PDFProcessor
 
 logger = logging.getLogger(__name__)
@@ -176,11 +183,23 @@ def _process_with_native_pdf(
     session.pdf_metadata["batch_strategy"] = "10_pages_1_overlap"
     db.commit()
 
+    # Extract embedded images from the PDF
+    deck_tag = sanitize_filename(session.display_name or session.filename)
+    all_images = extract_images_from_pdf(session.file_path, selected_pages)
+    image_mapping: dict[str, str] = {}
+    has_images = len(all_images) > 0
+
+    if has_images:
+        image_mapping = save_pdf_images(all_images, CARD_IMAGES_DIR, deck_tag)
+        session.pdf_metadata["extracted_image_count"] = len(all_images)
+        db.commit()
+        logger.info(f"Extracted {len(all_images)} images from PDF for session {session.id}")
 
     # Use centralized prompts from config/prompts.py
-    generation_prompt = GENERATION_PROMPT.user_prompt_template
-    system_prompt = GENERATION_PROMPT.system_prompt
-    output_format = GENERATION_PROMPT.output_format
+    # If images were extracted, use the PDF image-aware prompt; otherwise standard
+    base_prompt_template = PDF_GENERATION_PROMPT if has_images else GENERATION_PROMPT
+    system_prompt = base_prompt_template.system_prompt
+    output_format = base_prompt_template.output_format
 
     # Process each batch
     errors = []
@@ -192,8 +211,43 @@ def _process_with_native_pdf(
             new_pages = [p for p in page_batch if p not in processed_pages]
             context_pages = [p for p in page_batch if p in processed_pages]
 
-            # Build batch-specific prompt with context awareness
-            batch_prompt = generation_prompt
+            # Build batch-specific prompt
+            encoded_batch_images = None
+            if has_images:
+                # Get images for this batch's pages and build per-page image list
+                batch_images = get_images_for_pages(all_images, page_batch)
+                if batch_images:
+                    # Group images by page for the prompt
+                    page_groups: dict[int, list[str]] = {}
+                    for img in batch_images:
+                        page_groups.setdefault(img.page_num, []).append(img.filename)
+                    image_list = "\n".join(
+                        f"- Page {p + 1}: {', '.join(fnames)}"
+                        for p, fnames in sorted(page_groups.items())
+                    )
+
+                    # Encode images as base64 to send alongside the PDF
+                    ext_to_media = {
+                        "png": "image/png",
+                        "jpg": "image/jpeg",
+                        "jpeg": "image/jpeg",
+                        "gif": "image/gif",
+                        "webp": "image/webp",
+                    }
+                    encoded_batch_images = []
+                    for img in batch_images:
+                        media_type = ext_to_media.get(img.ext, "image/png")
+                        b64_data = base64.standard_b64encode(img.image_bytes).decode("utf-8")
+                        encoded_batch_images.append((b64_data, media_type))
+                else:
+                    image_list = "(no images on these pages)"
+
+                batch_prompt = base_prompt_template.user_prompt_template.format(
+                    image_list=image_list,
+                )
+            else:
+                batch_prompt = base_prompt_template.user_prompt_template
+
             if context_pages and new_pages:
                 batch_prompt += BATCH_CONTEXT_TEMPLATE.format(
                     batch_num=batch_idx + 1,
@@ -202,20 +256,20 @@ def _process_with_native_pdf(
                     new_pages=[p + 1 for p in new_pages],
                 )
 
-            # Generate cards from PDF pages
+            # Generate cards from PDF pages (with extracted images if available)
             response = llm.generate_structured_from_pdf(
                 pdf_path=session.file_path,
                 prompt=batch_prompt,
                 output_format=output_format,
                 system_prompt=system_prompt,
                 page_indices=page_batch,
+                images=encoded_batch_images,
             )
 
             # Mark all pages in this batch as processed
             processed_pages.update(page_batch)
 
             # Save cards to database
-            deck_tag = sanitize_filename(session.display_name or session.filename)
             for card_data in response.get("cards", []):
                 db_card = Card(
                     session_id=session.id,
@@ -226,6 +280,35 @@ def _process_with_native_pdf(
                     chunk_index=batch_idx,
                 )
                 db.add(db_card)
+
+                # Create CardImage records for any referenced images
+                if has_images:
+                    db.flush()  # Get db_card.id
+                    for img_filename in card_data.get("images", []):
+                        if img_filename in image_mapping:
+                            stored_name = image_mapping[img_filename]
+                            stored_path = CARD_IMAGES_DIR / stored_name
+                            file_size = stored_path.stat().st_size if stored_path.exists() else 0
+
+                            ext_to_media = {
+                                "png": "image/png",
+                                "jpg": "image/jpeg",
+                                "jpeg": "image/jpeg",
+                                "gif": "image/gif",
+                                "webp": "image/webp",
+                            }
+                            img_ext = img_filename.rsplit(".", 1)[-1].lower()
+                            media_type = ext_to_media.get(img_ext, "image/png")
+
+                            card_image = CardImage(
+                                card_id=db_card.id,
+                                session_id=session.id,
+                                original_filename=img_filename,
+                                stored_filename=stored_name,
+                                media_type=media_type,
+                                file_size=file_size,
+                            )
+                            db.add(card_image)
 
             session.processed_chunks = batch_idx + 1
             db.commit()
