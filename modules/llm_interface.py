@@ -227,6 +227,32 @@ class LLMInterface:
         with open(pdf_path, "rb") as f:
             return base64.standard_b64encode(f.read()).decode("utf-8")
 
+    def _encode_pdf_pages_to_base64(self, pdf_path: str | Path, page_indices: list[int]) -> str:
+        """
+        Extract specific pages from a PDF and encode to base64.
+
+        Args:
+            pdf_path: Path to the PDF file
+            page_indices: 0-based page indices to include
+
+        Returns:
+            Base64-encoded string of the subset PDF
+        """
+        import fitz
+
+        src = fitz.open(str(pdf_path))
+        dst = fitz.open()
+        try:
+            for page_num in page_indices:
+                if page_num < len(src):
+                    dst.insert_pdf(src, from_page=page_num, to_page=page_num)
+            pdf_bytes = dst.tobytes()
+        finally:
+            dst.close()
+            src.close()
+
+        return base64.standard_b64encode(pdf_bytes).decode("utf-8")
+
     def _call_anthropic_with_pdf(
         self,
         pdf_data: str,
@@ -332,8 +358,10 @@ class LLMInterface:
         logger.debug(f"Generating from PDF with provider: {self.provider}")
 
         if self.supports_native_pdf():
-            # Use native PDF support for Anthropic
-            pdf_data = self._encode_pdf_to_base64(pdf_path)
+            if page_indices is not None:
+                pdf_data = self._encode_pdf_pages_to_base64(pdf_path, page_indices)
+            else:
+                pdf_data = self._encode_pdf_to_base64(pdf_path)
             return self._call_anthropic_with_pdf(
                 pdf_data, prompt, system_prompt, images=images, **kwargs
             )

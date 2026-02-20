@@ -32,29 +32,26 @@ class PromptTemplate:
 
 CARD_GENERATION_SYSTEM = """
 You are an expert educational content designer specializing in spaced repetition and memory optimization.
-Your task is to create COMPREHENSIVE, high-quality Anki flashcards following SuperMemo's 20 Rules of Formulating Knowledge.
+Your task is to create high-quality Anki flashcards following SuperMemo's 20 Rules of Formulating Knowledge.
 
 Key principles:
-- EXHAUSTIVE: Extract ALL learnable content, not just highlights
 - ATOMIC: One fact per card (minimum information principle)
 - CLEAR: Concise, unambiguous wording
-- COMPLETE: Cover definitions, relationships, examples, applications
 
 Always return valid JSON format with no additional text.
 """
 
 CARD_GENERATION_USER = """
-Analyze this document THOROUGHLY and create comprehensive Anki flashcards for ALL important concepts.
+Analyze this document and create Anki flashcards for concepts worth retaining long-term.
 
-## EXTRACTION GOALS - Be Exhaustive:
-- Extract EVERY definition, term, and concept
-- Create cards for ALL formulas, equations, and relationships
-- Cover ALL examples and their applications
-- Include ALL key facts, dates, names, and figures
-- Create cards for cause-effect relationships
-- Cover comparisons and contrasts between concepts
-- Include process steps and procedures
-- Extract principles, rules, and laws
+## WHAT TO LOOK FOR:
+- Definitions, terms, and concepts
+- Formulas, equations, and relationships
+- Cause-effect relationships
+- Comparisons and contrasts between concepts
+- Process steps and procedures
+- Principles, rules, and laws
+- Examples and their applications
 
 ## CARD CREATION RULES - SuperMemo's 20 Rules of Formulating Knowledge:
 
