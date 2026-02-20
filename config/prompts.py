@@ -272,9 +272,9 @@ BATCH_CONTEXT_TEMPLATE = """
 
 ## BATCH CONTEXT:
 - This is batch {batch_num} of {total_batches}
-- Pages {context_pages} are included for context continuity (already processed)
-- Focus on generating cards for pages {new_pages} (new content)
-- Do NOT create cards for concepts already covered in context pages
+- The first {context_count} page(s) of this batch are included for context continuity (already processed)
+- Focus on generating cards for the remaining pages (new content)
+- Do NOT create cards for concepts already covered in the context pages
 """
 
 

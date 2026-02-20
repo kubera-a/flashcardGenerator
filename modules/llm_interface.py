@@ -51,6 +51,19 @@ class LLMInterface:
 
         logger.info(f"Initialized LLM interface with provider: {self.provider}")
 
+    def _retry_on_rate_limit(self, fn, *args, **kwargs):
+        """Retry a function with exponential backoff on rate limit errors (max 60s, 5 attempts)."""
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:
+                if "rate limit" not in str(e).lower() or attempt == max_attempts - 1:
+                    raise
+                delay = min(60, 10 * (2 ** attempt))  # 10, 20, 40, 60, 60
+                logger.info(f"Rate limit hit, retrying in {delay}s (attempt {attempt + 1}/{max_attempts})")
+                time.sleep(delay)
+
     def _call_openai(self, prompt: str, system_prompt: str, **kwargs) -> str:
         """
         Call the OpenAI API with the given prompts.
@@ -65,7 +78,7 @@ class LLMInterface:
         """
         params = {**self.config, **kwargs}
 
-        try:
+        def _do_call():
             response = self.client.chat.completions.create(
                 model=params.get("model", "gpt-4"),
                 messages=[
@@ -76,13 +89,8 @@ class LLMInterface:
                 max_tokens=params.get("max_tokens", 1000),
             )
             return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Error calling OpenAI API: {e}")
-            if "rate limit" in str(e).lower():
-                logger.info("Rate limit hit, backing off and retrying...")
-                time.sleep(5)
-                return self._call_openai(prompt, system_prompt, **kwargs)
-            raise
+
+        return self._retry_on_rate_limit(_do_call)
 
     def _call_anthropic(self, prompt: str, system_prompt: str, **kwargs) -> str:
         """
@@ -98,7 +106,7 @@ class LLMInterface:
         """
         params = {**self.config, **kwargs}
 
-        try:
+        def _do_call():
             response = self.client.messages.create(
                 model=params.get("model", "claude-3-opus-20240229"),
                 system=system_prompt,
@@ -108,13 +116,8 @@ class LLMInterface:
                 timeout=httpx.Timeout(600.0, connect=5.0),
             )
             return response.content[0].text
-        except Exception as e:
-            logger.error(f"Error calling Anthropic API: {e}")
-            if "rate limit" in str(e).lower():
-                logger.info("Rate limit hit, backing off and retrying...")
-                time.sleep(5)
-                return self._call_anthropic(prompt, system_prompt, **kwargs)
-            raise
+
+        return self._retry_on_rate_limit(_do_call)
 
     def generate_completion(
         self, prompt: str, system_prompt: str = "You are a helpful assistant.", **kwargs
@@ -306,7 +309,7 @@ class LLMInterface:
             }
         )
 
-        try:
+        def _do_call():
             response = self.client.messages.create(
                 model=params.get("model", "claude-sonnet-4-5-20250514"),
                 system=system_prompt,
@@ -316,15 +319,8 @@ class LLMInterface:
                 timeout=httpx.Timeout(600.0, connect=5.0),
             )
             return response.content[0].text
-        except Exception as e:
-            logger.error(f"Error calling Anthropic API with PDF: {e}")
-            if "rate limit" in str(e).lower():
-                logger.info("Rate limit hit, backing off and retrying...")
-                time.sleep(5)
-                return self._call_anthropic_with_pdf(
-                    pdf_data, prompt, system_prompt, images=images, **kwargs
-                )
-            raise
+
+        return self._retry_on_rate_limit(_do_call)
 
     def generate_from_pdf(
         self,
@@ -527,7 +523,7 @@ class LLMInterface:
             }
         )
 
-        try:
+        def _do_call():
             response = self.client.messages.create(
                 model=params.get("model", "claude-sonnet-4-5-20250514"),
                 system=system_prompt,
@@ -537,15 +533,8 @@ class LLMInterface:
                 timeout=httpx.Timeout(600.0, connect=5.0),
             )
             return response.content[0].text
-        except Exception as e:
-            logger.error(f"Error calling Anthropic API with images: {e}")
-            if "rate limit" in str(e).lower():
-                logger.info("Rate limit hit, backing off and retrying...")
-                time.sleep(5)
-                return self._call_anthropic_with_images(
-                    text_content, images, system_prompt, **kwargs
-                )
-            raise
+
+        return self._retry_on_rate_limit(_do_call)
 
     def generate_structured_from_markdown(
         self,

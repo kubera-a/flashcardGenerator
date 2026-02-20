@@ -217,13 +217,15 @@ def _process_with_native_pdf(
                 # Get images for this batch's pages and build per-page image list
                 batch_images = get_images_for_pages(all_images, page_batch)
                 if batch_images:
-                    # Group images by page for the prompt
+                    # Group images by position within this batch's subset PDF
+                    page_to_position = {p: i + 1 for i, p in enumerate(page_batch)}
                     page_groups: dict[int, list[str]] = {}
                     for img in batch_images:
-                        page_groups.setdefault(img.page_num, []).append(img.filename)
+                        pos = page_to_position.get(img.page_num, 0)
+                        page_groups.setdefault(pos, []).append(img.filename)
                     image_list = "\n".join(
-                        f"- Page {p + 1}: {', '.join(fnames)}"
-                        for p, fnames in sorted(page_groups.items())
+                        f"- Page {pos} of this batch: {', '.join(fnames)}"
+                        for pos, fnames in sorted(page_groups.items())
                     )
 
                     # Encode images as base64 to send alongside the PDF
@@ -252,8 +254,7 @@ def _process_with_native_pdf(
                 batch_prompt += BATCH_CONTEXT_TEMPLATE.format(
                     batch_num=batch_idx + 1,
                     total_batches=len(batches),
-                    context_pages=[p + 1 for p in context_pages],
-                    new_pages=[p + 1 for p in new_pages],
+                    context_count=len(context_pages),
                 )
 
             # Generate cards from PDF pages (with extracted images if available)
