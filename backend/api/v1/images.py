@@ -1,5 +1,6 @@
 """Image serving API endpoints."""
 
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,6 +8,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from backend.db.database import get_db
+from backend.db.models import CardImage
 from backend.db.models import Session as DBSession
 from config.settings import CARD_IMAGES_DIR
 
@@ -50,6 +52,26 @@ async def get_image(
                 alt_path = Path(base_dir) / original_name
                 if alt_path.exists():
                     image_path = alt_path
+
+    if not image_path.exists():
+        # Fallback: look up CardImage by matching filename patterns
+        card_image = db.query(CardImage).filter(
+            CardImage.session_id == session_id,
+            CardImage.stored_filename == filename,
+        ).first()
+
+        if not card_image:
+            # Strip {digits}_ prefix and match the base name
+            base_match = re.match(r'^\d+_(.+)$', filename)
+            if base_match:
+                base_name = base_match.group(1)
+                card_image = db.query(CardImage).filter(
+                    CardImage.session_id == session_id,
+                    CardImage.stored_filename.like(f'%_{base_name}'),
+                ).first()
+
+        if card_image:
+            image_path = IMAGE_STORAGE_DIR / card_image.stored_filename
 
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="Image not found")

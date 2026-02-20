@@ -407,7 +407,7 @@ export default function UploadPage() {
           onClick={handleUploadPreview}
           disabled={!file || isLoading}
         >
-          {isLoading ? 'Loading Preview...' : fileType === 'markdown' ? 'Preview Markdown' : 'Select Pages'}
+          {isLoading ? 'Uploading...' : 'Upload & Preview'}
         </button>
         {fileType === 'pdf' && (
           <button

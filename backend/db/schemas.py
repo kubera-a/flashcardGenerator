@@ -36,12 +36,18 @@ class SessionCreate(BaseModel):
     llm_provider: str = "openai"
 
 
+class RenameSessionRequest(BaseModel):
+    """Schema for renaming a session."""
+    display_name: str
+
+
 class SessionResponse(BaseModel):
     """Schema for session responses."""
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     filename: str
+    display_name: str | None = None
     status: str
     source_type: str = "pdf"
     total_chunks: int
@@ -197,10 +203,9 @@ class ExportResponse(BaseModel):
 
 class ExportWithMediaResponse(BaseModel):
     """Schema for export with media files."""
-    filename: str
+    folder_name: str
     card_count: int
     image_count: int
-    download_url: str
 
 
 # Batch operation schemas
@@ -272,3 +277,27 @@ class MarkdownPreviewResponse(BaseModel):
     image_count: int
     content_preview: str
     images: list[str]  # List of image filenames
+
+
+# AnkiConnect schemas
+class AnkiConnectExportRequest(BaseModel):
+    """Schema for AnkiConnect direct export requests."""
+    deck_name: str | None = None
+    include_tags: bool = True
+
+
+class AnkiConnectExportResponse(BaseModel):
+    """Schema for AnkiConnect export responses."""
+    success: bool
+    cards_sent: int
+    cards_failed: int
+    images_sent: int
+    deck_name: str
+    errors: list[str] = []
+
+
+class AnkiConnectStatusResponse(BaseModel):
+    """Schema for AnkiConnect availability check."""
+    available: bool
+    version: int | None = None
+    decks: list[str] = []

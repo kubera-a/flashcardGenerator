@@ -9,8 +9,6 @@ import logging
 import os
 import re
 import shutil
-import tempfile
-import zipfile
 from pathlib import Path
 
 from config.settings import ANKI_CONFIG, OUTPUT_DIR
@@ -218,48 +216,39 @@ class AnkiExporter:
 
         return text
 
-    def export_to_zip_with_media(
+    def export_to_folder(
         self,
         cards: list[dict],
         card_images: list[dict],
         image_storage_dir: Path,
-        output_path: str | Path | None = None,
-        deck_name: str | None = None,
-    ) -> Path:
+        export_dir: Path,
+    ) -> tuple[Path, int]:
         """
-        Export flashcards with associated media as a ZIP file.
+        Export flashcards with associated media to a flat folder.
 
-        The ZIP contains:
+        The folder contains:
         - cards.csv: The flashcard data with HTML img tags
-        - media/: Folder containing all referenced images
-
-        This format allows easy import into Anki:
-        1. Extract media/* contents to Anki's collection.media folder
-        2. Import cards.csv with "Allow HTML in fields" checked
+        - Image files copied directly (flat, no subfolder)
 
         Args:
             cards: List of card dicts with front, back, tags
             card_images: List of CardImage dicts with stored_filename, original_filename
             image_storage_dir: Directory where stored images are located
-            output_path: Path for the output ZIP file
-            deck_name: Optional deck name for the export
+            export_dir: Directory to write the export into
 
         Returns:
-            Path to the exported ZIP file
+            Tuple of (export_dir path, number of images copied)
         """
         if not cards:
             logger.warning("No cards to export")
             raise ValueError("Cannot export empty card list")
 
-        # Determine the output path
-        if output_path is None:
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            output_path = OUTPUT_DIR / "anki_cards_with_media.zip"
-        else:
-            output_path = Path(output_path)
-            os.makedirs(output_path.parent, exist_ok=True)
+        # Create the export directory (clear if it already exists)
+        if export_dir.exists():
+            shutil.rmtree(export_dir)
+        export_dir.mkdir(parents=True)
 
-        logger.info(f"Exporting {len(cards)} cards with {len(card_images)} images to {output_path}")
+        logger.info(f"Exporting {len(cards)} cards with {len(card_images)} images to {export_dir}")
 
         # Create a mapping from original filenames to stored filenames
         image_filename_map = {}
@@ -268,118 +257,50 @@ class AnkiExporter:
             stored = img.get("stored_filename", "")
             if original and stored:
                 image_filename_map[original] = stored
+                # Also map just the basename (LLM may omit directory prefix)
+                basename = Path(original).name
+                if basename not in image_filename_map:
+                    image_filename_map[basename] = stored
                 # Also map the stored filename to itself for direct references
                 image_filename_map[stored] = stored
 
-        # Create temp directory for building the ZIP
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            media_dir = temp_path / "media"
-            media_dir.mkdir()
+        # Copy images directly into the export folder
+        copied_images = set()
+        for img in card_images:
+            stored_filename = img.get("stored_filename", "")
+            if stored_filename:
+                src_path = image_storage_dir / stored_filename
+                if src_path.exists():
+                    dst_path = export_dir / stored_filename
+                    shutil.copy2(src_path, dst_path)
+                    copied_images.add(stored_filename)
+                    logger.debug(f"Copied image: {stored_filename}")
 
-            # Copy images to media folder
-            copied_images = set()
-            for img in card_images:
-                stored_filename = img.get("stored_filename", "")
-                if stored_filename:
-                    src_path = image_storage_dir / stored_filename
-                    if src_path.exists():
-                        # Use stored filename in media folder
-                        dst_path = media_dir / stored_filename
-                        shutil.copy2(src_path, dst_path)
-                        copied_images.add(stored_filename)
-                        logger.debug(f"Copied image: {stored_filename}")
+        logger.info(f"Copied {len(copied_images)} images to export folder")
 
-            logger.info(f"Copied {len(copied_images)} images to media folder")
+        # Write CSV file
+        csv_path = export_dir / "cards.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+            writer.writerow(["front", "back", "tags"])
 
-            # Write CSV file
-            csv_path = temp_path / "cards.csv"
-            with open(csv_path, "w", newline="", encoding="utf-8") as file:
-                writer = csv.writer(file)
-                writer.writerow(["front", "back", "tags"])
+            for card in cards:
+                front = card.get("front", "")
+                back = card.get("back", "")
+                tags = card.get("tags", [])
 
-                for card in cards:
-                    front = card.get("front", "")
-                    back = card.get("back", "")
-                    tags = card.get("tags", [])
+                # Convert image references to HTML, mapping to stored filenames
+                def replace_with_stored(match):
+                    original_name = match.group(1).strip()
+                    stored_name = image_filename_map.get(original_name, original_name)
+                    return f'<img src="{stored_name}">'
 
-                    # Convert image references to HTML, mapping to stored filenames
-                    def replace_with_stored(match):
-                        original_name = match.group(1).strip()
-                        # Try to find stored filename
-                        stored_name = image_filename_map.get(original_name, original_name)
-                        return f'<img src="{stored_name}">'
+                pattern = r'\[IMAGE:\s*([^\]]+)\]'
+                back = re.sub(pattern, replace_with_stored, back)
+                front = re.sub(pattern, replace_with_stored, front)
 
-                    pattern = r'\[IMAGE:\s*([^\]]+)\]'
-                    back = re.sub(pattern, replace_with_stored, back)
-                    front = re.sub(pattern, replace_with_stored, front)
+                tag_str = self._format_tags(tags)
+                writer.writerow([front, back, tag_str])
 
-                    # CSV escaping for quotes
-                    front = front.replace('"', '""')
-                    back = back.replace('"', '""')
-
-                    # Format tags
-                    tag_str = self._format_tags(tags)
-
-                    writer.writerow([front, back, tag_str])
-
-            # Write instructions file
-            instructions = self._generate_media_import_instructions(deck_name)
-            instructions_path = temp_path / "README.txt"
-            with open(instructions_path, "w", encoding="utf-8") as file:
-                file.write(instructions)
-
-            # Create ZIP file
-            with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                # Add CSV
-                zf.write(csv_path, "cards.csv")
-                # Add instructions
-                zf.write(instructions_path, "README.txt")
-                # Add media folder contents
-                for img_file in media_dir.iterdir():
-                    zf.write(img_file, f"media/{img_file.name}")
-
-        logger.info(f"Successfully exported ZIP with {len(cards)} cards and {len(copied_images)} images")
-        return output_path
-
-    def _generate_media_import_instructions(self, deck_name: str | None = None) -> str:
-        """
-        Generate instructions for importing the ZIP with media into Anki.
-
-        Args:
-            deck_name: Optional deck name
-
-        Returns:
-            Instructions as a string
-        """
-        deck = deck_name or self.config.get("default_deck", "Generated")
-        return f"""Anki Import Instructions (with Media)
-=====================================
-
-This ZIP file contains flashcards with embedded images.
-
-To import into Anki:
-
-1. EXTRACT IMAGES:
-   - Extract the contents of the 'media/' folder
-   - Copy all files to your Anki media folder:
-     * Windows: %APPDATA%\\Anki2\\[Profile]\\collection.media
-     * Mac: ~/Library/Application Support/Anki2/[Profile]/collection.media
-     * Linux: ~/.local/share/Anki2/[Profile]/collection.media
-   - Replace [Profile] with your Anki profile name (usually "User 1")
-
-2. IMPORT CARDS:
-   - Open Anki
-   - Click "Import File"
-   - Select "cards.csv" from this ZIP
-   - In the import dialog:
-     * Set "Type" to "Basic"
-     * IMPORTANT: Check "Allow HTML in fields"
-     * Set the deck to "{deck}"
-   - Click "Import"
-
-Your cards with images will now be available in Anki!
-
-Note: Images are referenced using HTML <img> tags.
-If images don't display, verify they were copied to the collection.media folder.
-"""
+        logger.info(f"Successfully exported {len(cards)} cards and {len(copied_images)} images to {export_dir}")
+        return export_dir, len(copied_images)

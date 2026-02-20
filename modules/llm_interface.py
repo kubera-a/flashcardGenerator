@@ -10,6 +10,7 @@ import logging
 import time
 from pathlib import Path
 
+import httpx
 import openai
 from anthropic import Anthropic
 
@@ -62,7 +63,6 @@ class LLMInterface:
         Returns:
             The LLM response as a string
         """
-        # Merge default config with provided kwargs
         params = {**self.config, **kwargs}
 
         try:
@@ -78,7 +78,6 @@ class LLMInterface:
             return response.choices[0].message.content
         except Exception as e:
             logger.error(f"Error calling OpenAI API: {e}")
-            # Implement exponential backoff for rate limits
             if "rate limit" in str(e).lower():
                 logger.info("Rate limit hit, backing off and retrying...")
                 time.sleep(5)
@@ -97,7 +96,6 @@ class LLMInterface:
         Returns:
             The LLM response as a string
         """
-        # Merge default config with provided kwargs
         params = {**self.config, **kwargs}
 
         try:
@@ -107,11 +105,11 @@ class LLMInterface:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=params.get("temperature", 0.3),
                 max_tokens=params.get("max_tokens", 1000),
+                timeout=httpx.Timeout(600.0, connect=5.0),
             )
             return response.content[0].text
         except Exception as e:
             logger.error(f"Error calling Anthropic API: {e}")
-            # Implement exponential backoff for rate limits
             if "rate limit" in str(e).lower():
                 logger.info("Rate limit hit, backing off and retrying...")
                 time.sleep(5)
@@ -236,18 +234,7 @@ class LLMInterface:
         system_prompt: str,
         **kwargs,
     ) -> str:
-        """
-        Call the Anthropic API with a PDF document.
-
-        Args:
-            pdf_data: Base64-encoded PDF data
-            prompt: The user prompt
-            system_prompt: The system prompt
-            **kwargs: Additional parameters to pass to the API
-
-        Returns:
-            The LLM response as a string
-        """
+        """Call the Anthropic API with a PDF document."""
         params = {**self.config, **kwargs}
 
         try:
@@ -275,6 +262,7 @@ class LLMInterface:
                 ],
                 temperature=params.get("temperature", 0.3),
                 max_tokens=params.get("max_tokens", 4096),
+                timeout=httpx.Timeout(600.0, connect=5.0),
             )
             return response.content[0].text
         except Exception as e:
@@ -482,6 +470,7 @@ class LLMInterface:
                 messages=[{"role": "user", "content": content}],
                 temperature=params.get("temperature", 0.3),
                 max_tokens=params.get("max_tokens", 4096),
+                timeout=httpx.Timeout(600.0, connect=5.0),
             )
             return response.content[0].text
         except Exception as e:

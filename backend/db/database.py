@@ -13,7 +13,10 @@ DATABASE_URL = f"sqlite:///{DATA_DIR / 'flashcards.db'}"
 # Create engine
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},  # Needed for SQLite
+    connect_args={
+        "check_same_thread": False,  # Needed for SQLite
+        "timeout": 30,  # Wait up to 30s for locks instead of failing immediately
+    },
     echo=False,
 )
 
@@ -46,6 +49,12 @@ def run_migrations() -> None:
                 conn.commit()
                 print("Migration complete: source_type column added")
 
+            if "display_name" not in columns:
+                print("Adding display_name column to sessions table...")
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN display_name VARCHAR(255)"))
+                conn.commit()
+                print("Migration complete: display_name column added")
+
         # Check if card_images table exists
         result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='card_images'"))
         if not result.fetchone():
@@ -72,6 +81,11 @@ def init_db() -> None:
     """Initialize the database by creating all tables."""
     from backend.db.models import Base
     Base.metadata.create_all(bind=engine)
+
+    # Enable WAL mode for concurrent read/write access
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA journal_mode=WAL"))
+        conn.commit()
 
     # Run migrations for existing databases
     run_migrations()

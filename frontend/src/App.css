@@ -238,6 +238,48 @@ body {
   word-break: break-word;
 }
 
+.session-name-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.session-name-row h3,
+.session-name-row h2 {
+  word-break: break-word;
+}
+
+.btn-icon {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 2px 6px;
+  color: #6b7280;
+  flex-shrink: 0;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.btn-icon:hover {
+  background-color: #f3f4f6;
+  color: #1a1a2e;
+  border-color: #d1d5db;
+}
+
+.session-name-input {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #1a1a2e;
+  border: 1px solid #3b82f6;
+  border-radius: 4px;
+  padding: 2px 4px;
+  width: 100%;
+  outline: none;
+  background: white;
+}
+
 .session-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

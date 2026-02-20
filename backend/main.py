@@ -7,9 +7,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from backend.api.v1.router import api_router
-from backend.db.database import init_db
+from backend.db.database import SessionLocal, init_db
+from backend.db.models import Session as DBSession
+from backend.db.models import SessionStatus
 from backend.services.prompt_service import seed_initial_prompts
 from config.settings import EXPORTS_DIR
+
+
+def recover_stuck_sessions():
+    """Reset any sessions stuck in 'processing' state from a previous crash/restart."""
+    db = SessionLocal()
+    try:
+        stuck = db.query(DBSession).filter(
+            DBSession.status == SessionStatus.PROCESSING.value
+        ).all()
+        for session in stuck:
+            session.status = SessionStatus.FAILED.value
+        if stuck:
+            db.commit()
+            print(f"Recovered {len(stuck)} stuck session(s) from 'processing' to 'failed'")
+    finally:
+        db.close()
 
 
 @asynccontextmanager
@@ -18,6 +36,7 @@ async def lifespan(app: FastAPI):
     # Startup
     init_db()
     seed_initial_prompts()
+    recover_stuck_sessions()
     yield
     # Shutdown (nothing to do)
 

@@ -58,6 +58,7 @@ class Session(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     filename: Mapped[str] = mapped_column(String(255))
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_path: Mapped[str] = mapped_column(String(500))
     source_type: Mapped[str] = mapped_column(
         String(50), default=SourceType.PDF.value

@@ -53,6 +53,8 @@ export const sessionsApi = {
   get: (id: number) => api.get(`/sessions/${id}`),
   getStatus: (id: number) => api.get(`/sessions/${id}/status`),
   finalize: (id: number) => api.post(`/sessions/${id}/finalize`),
+  rename: (id: number, displayName: string) =>
+    api.patch(`/sessions/${id}/rename`, { display_name: displayName }),
   delete: (id: number) => api.delete(`/sessions/${id}`),
 };
 
@@ -106,6 +108,12 @@ export const exportApi = {
       deck_name: deckName,
     }),
   list: () => api.get('/export/list'),
+  ankiConnectStatus: () => api.get('/export/anki-connect/status'),
+  sendToAnki: (sessionId: number, deckName?: string, includeTags: boolean = true) =>
+    api.post(`/export/session/${sessionId}/anki-connect`, {
+      include_tags: includeTags,
+      deck_name: deckName,
+    }),
 };
 
 // Images API

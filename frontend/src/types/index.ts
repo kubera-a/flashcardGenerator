@@ -7,6 +7,7 @@ export type SourceType = 'pdf' | 'markdown';
 export interface Session {
   id: number;
   filename: string;
+  display_name: string | null;
   status: string;
   source_type: SourceType;
   total_chunks: number;
@@ -117,10 +118,9 @@ export interface ExportResponse {
 }
 
 export interface ExportWithMediaResponse {
-  filename: string;
+  folder_name: string;
   card_count: number;
   image_count: number;
-  download_url: string;
 }
 
 export interface BatchOperationResponse {
@@ -158,4 +158,20 @@ export interface MarkdownPreviewResponse {
   image_count: number;
   content_preview: string;
   images: string[];
+}
+
+// AnkiConnect Types
+export interface AnkiConnectStatusResponse {
+  available: boolean;
+  version: number | null;
+  decks: string[];
+}
+
+export interface AnkiConnectExportResponse {
+  success: boolean;
+  cards_sent: number;
+  cards_failed: number;
+  images_sent: number;
+  deck_name: string;
+  errors: string[];
 }

@@ -12,6 +12,8 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from config.settings import sanitize_filename
+
 logger = logging.getLogger(__name__)
 
 
@@ -172,14 +174,14 @@ class MarkdownProcessor:
         return self.parse_markdown(main_md)
 
     def get_image_mapping(
-        self, doc: MarkdownDocument, session_id: int
+        self, doc: MarkdownDocument, deck_prefix: str
     ) -> dict[str, str]:
         """
-        Create a mapping from original image paths to session-prefixed filenames.
+        Create a mapping from original image paths to deck-prefixed filenames.
 
         Args:
             doc: Parsed markdown document
-            session_id: Session ID to prefix filenames with
+            deck_prefix: Deck tag to prefix filenames with (e.g. "gachapter_2")
 
         Returns:
             Dict mapping relative_path -> stored_filename
@@ -187,9 +189,8 @@ class MarkdownProcessor:
         mapping = {}
         for img in doc.images:
             if img.exists and img.absolute_path:
-                # Sanitize filename: replace spaces, keep extension
-                safe_name = img.absolute_path.name.replace(" ", "_")
-                stored_name = f"{session_id}_{safe_name}"
+                safe_name = sanitize_filename(img.absolute_path.name)
+                stored_name = f"{deck_prefix}_{safe_name}"
                 mapping[img.relative_path] = stored_name
         return mapping
 

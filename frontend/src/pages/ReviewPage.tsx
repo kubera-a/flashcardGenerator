@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { sessionsApi, cardsApi, exportApi, imagesApi } from '../api/client';
-import type { Card, SessionWithStats, RejectionType } from '../types';
+import type { Card, SessionWithStats, RejectionType, AnkiConnectStatusResponse, AnkiConnectExportResponse } from '../types';
 
 // Convert [IMAGE: filename] references to img tags
 function renderWithImages(text: string, sessionId: number): React.ReactNode {
@@ -255,6 +255,24 @@ export default function ReviewPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<string>('all');
+  const [isRenamingSession, setIsRenamingSession] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  const renameMutation = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) =>
+      sessionsApi.rename(id, name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
+    },
+  });
+
+  useEffect(() => {
+    if (isRenamingSession && renameInputRef.current) {
+      renameInputRef.current.focus();
+      renameInputRef.current.select();
+    }
+  }, [isRenamingSession]);
 
   const { data: session, isLoading: sessionLoading } = useQuery({
     queryKey: ['session', sessionId],
@@ -311,25 +329,19 @@ export default function ReviewPage() {
     },
   });
 
+  const batchApproveMutation = useMutation({
+    mutationFn: (cardIds: number[]) => cardsApi.batchApprove(cardIds),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['cards', sessionId] });
+      queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
+    },
+  });
+
   const finalizeMutation = useMutation({
     mutationFn: () => sessionsApi.finalize(Number(sessionId)),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
       alert('Session finalized! Prompt suggestions will be generated based on your feedback.');
-    },
-  });
-
-  const exportMutation = useMutation({
-    mutationFn: () => exportApi.exportSession(Number(sessionId)),
-    onSuccess: (response) => {
-      // Use relative URL in production, absolute in development
-      const baseUrl = import.meta.env.DEV ? 'http://localhost:8000' : '';
-      const downloadUrl = `${baseUrl}${response.data.download_url}`;
-      window.open(downloadUrl, '_blank');
-    },
-    onError: (error) => {
-      console.error('Export failed:', error);
-      alert('Export to Anki failed. Try using "Download CSV" instead.');
     },
   });
 
@@ -365,25 +377,41 @@ export default function ReviewPage() {
       const response = await exportApi.exportSessionWithMedia(Number(sessionId));
       return response.data;
     },
-    onSuccess: async (data) => {
-      const baseUrl = import.meta.env.DEV ? 'http://localhost:8000' : '';
-      const downloadUrl = `${baseUrl}${data.download_url}`;
-
-      // Fetch the ZIP and trigger download with save dialog
-      const response = await fetch(downloadUrl);
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = data.filename || 'flashcards_with_media.zip';
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+    onSuccess: (data) => {
+      alert(`Exported ${data.card_count} cards${data.image_count > 0 ? ` and ${data.image_count} images` : ''} to folder: ${data.folder_name}`);
     },
     onError: (error) => {
       console.error('Export with media failed:', error);
       alert('Failed to export with media. Please try again.');
+    },
+  });
+
+  // AnkiConnect status polling
+  const { data: ankiStatus } = useQuery<AnkiConnectStatusResponse>({
+    queryKey: ['anki-connect-status'],
+    queryFn: async () => {
+      const response = await exportApi.ankiConnectStatus();
+      return response.data;
+    },
+    refetchInterval: 30000,
+    enabled: (session?.card_count ?? 0) - (session?.rejected_count ?? 0) > 0,
+  });
+
+  const sendToAnkiMutation = useMutation<AnkiConnectExportResponse>({
+    mutationFn: async () => {
+      const response = await exportApi.sendToAnki(Number(sessionId));
+      return response.data;
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        alert(`Sent ${data.cards_sent} cards to Anki deck "${data.deck_name}"${data.images_sent > 0 ? ` with ${data.images_sent} images` : ''}.`);
+      } else {
+        alert(`Sent ${data.cards_sent} cards to Anki deck "${data.deck_name}".\n${data.errors.join('\n')}`);
+      }
+    },
+    onError: (error: any) => {
+      const detail = error?.response?.data?.detail || 'Failed to send to Anki. Is Anki running with AnkiConnect?';
+      alert(detail);
     },
   });
 
@@ -410,7 +438,44 @@ export default function ReviewPage() {
           <button className="btn btn-secondary" onClick={() => navigate('/')}>
             ← Back
           </button>
-          <h2>{session.filename}</h2>
+          {isRenamingSession ? (
+            <input
+              ref={renameInputRef}
+              className="session-name-input"
+              style={{ fontSize: '1.5rem' }}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onBlur={() => {
+                const trimmed = renameValue.trim();
+                if (trimmed && trimmed !== (session.display_name || session.filename)) {
+                  renameMutation.mutate({ id: session.id, name: trimmed });
+                }
+                setIsRenamingSession(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  (e.target as HTMLInputElement).blur();
+                } else if (e.key === 'Escape') {
+                  setRenameValue(session.display_name || session.filename);
+                  setIsRenamingSession(false);
+                }
+              }}
+            />
+          ) : (
+            <div className="session-name-row">
+              <h2>{session.display_name || session.filename}</h2>
+              <button
+                className="btn-icon"
+                onClick={() => {
+                  setRenameValue(session.display_name || session.filename);
+                  setIsRenamingSession(true);
+                }}
+                title="Rename session"
+              >
+                &#9998;
+              </button>
+            </div>
+          )}
           <span className={`status-badge ${session.status}`}>{session.status}</span>
         </div>
 
@@ -430,6 +495,22 @@ export default function ReviewPage() {
         </div>
 
         <div className="header-actions">
+          {session.pending_count > 0 && (
+            <button
+              className="btn btn-success"
+              onClick={() => {
+                if (confirm(`Approve all ${session.pending_count} pending cards?`)) {
+                  const pendingCards = cards?.filter(c => c.status === 'pending').map(c => c.id) || [];
+                  if (pendingCards.length > 0) {
+                    batchApproveMutation.mutate(pendingCards);
+                  }
+                }
+              }}
+              disabled={batchApproveMutation.isPending}
+            >
+              {batchApproveMutation.isPending ? 'Approving...' : `Approve All (${session.pending_count})`}
+            </button>
+          )}
           {session.status !== 'finalized' && session.pending_count === 0 && session.card_count > 0 && (
             <button
               className="btn btn-primary"
@@ -439,14 +520,15 @@ export default function ReviewPage() {
               {finalizeMutation.isPending ? 'Finalizing...' : 'Finalize Session'}
             </button>
           )}
-          {(session.approved_count > 0) && (
+          {(session.card_count - session.rejected_count > 0) && (
             <>
               <button
-                className="btn btn-secondary"
-                onClick={() => exportMutation.mutate()}
-                disabled={exportMutation.isPending}
+                className="btn btn-primary"
+                onClick={() => sendToAnkiMutation.mutate()}
+                disabled={sendToAnkiMutation.isPending || !ankiStatus?.available}
+                title={ankiStatus?.available ? 'Send cards directly to Anki via AnkiConnect' : 'Anki is not running or AnkiConnect is not installed'}
               >
-                {exportMutation.isPending ? 'Exporting...' : 'Export to Anki'}
+                {sendToAnkiMutation.isPending ? 'Sending...' : 'Send to Anki'}
               </button>
               <button
                 className="btn btn-secondary"
@@ -457,7 +539,7 @@ export default function ReviewPage() {
               </button>
               {hasImages && (
                 <button
-                  className="btn btn-primary"
+                  className="btn btn-secondary"
                   onClick={() => exportWithMediaMutation.mutate()}
                   disabled={exportWithMediaMutation.isPending}
                 >

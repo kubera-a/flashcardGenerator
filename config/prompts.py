@@ -5,9 +5,9 @@ Centralized prompt definitions for flashcard generation.
 
 Design Principles:
 1. Single source of truth for all prompts
-2. Structured using dataclasses for type safety
-3. Clear separation between system prompts and user templates
-4. Based on SuperMemo's 20 Rules of Formulating Knowledge
+2. One unified generation prompt for all document types (PDF, text, markdown)
+3. Image handling is an optional add-on, not a separate prompt
+4. All 20 of SuperMemo's Rules of Formulating Knowledge are included
 
 References:
 - SuperMemo 20 Rules: https://www.supermemo.com/en/blog/twenty-rules-of-formulating-knowledge
@@ -27,34 +27,7 @@ class PromptTemplate:
 
 
 # =============================================================================
-# SuperMemo's 20 Rules Summary (for reference)
-# =============================================================================
-SUPERMEMO_RULES = """
-1. Do not learn if you do not understand
-2. Learn before you memorize
-3. Build upon the basics
-4. Stick to the minimum information principle
-5. Cloze deletion is easy and effective
-6. Use imagery
-7. Use mnemonic techniques
-8. Graphic deletion is as good as cloze deletion
-9. Avoid sets
-10. Avoid enumerations
-11. Combat interference
-12. Optimize wording
-13. Refer to other memories
-14. Personalize and provide examples
-15. Rely on emotional states
-16. Context cues simplify wording
-17. Redundancy does not contradict minimum information principle
-18. Provide sources
-19. Provide date stamping
-20. Prioritize
-"""
-
-
-# =============================================================================
-# Card Generation Prompts
+# Unified Card Generation Prompts
 # =============================================================================
 
 CARD_GENERATION_SYSTEM = """
@@ -67,13 +40,11 @@ Key principles:
 - CLEAR: Concise, unambiguous wording
 - COMPLETE: Cover definitions, relationships, examples, applications
 
-Generate as many cards as needed to fully cover the material. Do not artificially limit the number of cards.
-
 Always return valid JSON format with no additional text.
 """
 
 CARD_GENERATION_USER = """
-Analyze this PDF document THOROUGHLY and create comprehensive Anki flashcards for ALL important concepts.
+Analyze this document THOROUGHLY and create comprehensive Anki flashcards for ALL important concepts.
 
 ## EXTRACTION GOALS - Be Exhaustive:
 - Extract EVERY definition, term, and concept
@@ -85,40 +56,56 @@ Analyze this PDF document THOROUGHLY and create comprehensive Anki flashcards fo
 - Include process steps and procedures
 - Extract principles, rules, and laws
 
-## CARD CREATION RULES (Based on SuperMemo's 20 Rules):
+## CARD CREATION RULES - SuperMemo's 20 Rules of Formulating Knowledge:
 
-1. **Minimum Information Principle**: Each card tests ONE atomic piece of knowledge
+1. **Do not learn if you do not understand**: Only create cards for concepts the document explains clearly. Do not create cards about vague or unexplained references.
+
+2. **Learn before you memorize**: Structure cards so foundational concepts come before details. Define terms before testing their applications.
+
+3. **Build upon the basics**: Start with simple, fundamental cards. Create more specific cards that build on those basics.
+
+4. **Minimum information principle**: Each card tests ONE atomic piece of knowledge.
    - BAD: "What are the three types of X?"
    - GOOD: Three separate cards, one for each type
 
-2. **Optimize Wording**: Keep questions and answers concise and clear
-   - Front: Short, specific question
-   - Back: Brief, direct answer (1-2 sentences max)
-
-3. **No Sets or Enumerations**: Never ask "List all..." or "What are the types of..."
-   - Instead: Create individual cards for each item
-   - Use "What is ONE example of..." or test each item separately
-
-4. **Use Cloze-Style Questions**: Frame questions to fill in the blank
+5. **Cloze deletion is easy and effective**: Use fill-in-the-blank style questions.
    - "The process of X is called ___" -> Answer: "Y"
    - "X is defined as ___" -> Answer: "definition"
 
-5. **Context Cues**: Add brief context in brackets when needed
-   - "[In genetics] What does DNA stand for?"
+6. **Use imagery**: When images are available, reference them with [IMAGE: filename.png]. Place diagrams in the QUESTION to test visual recognition.
 
-6. **Build on Basics**: Create foundational cards before advanced ones
-   - Define terms before asking about their applications
+7. **Use mnemonic techniques**: When content lends itself to it, frame cards to leverage memorable associations.
 
-7. **Combat Interference**: Make similar concepts distinguishable
-   - Add context to prevent confusion between similar terms
+8. **Graphic deletion is as good as cloze deletion**: For diagrams, ask the learner to identify missing parts or labels.
 
-8. **Provide Examples**: Include concrete examples in answers when helpful
+9. **Avoid sets**: Never ask "List all..." or "What are the types of..."
+   - Instead: Create individual cards for each item
+   - Use "What is ONE example of..." or test each item separately
 
-## QUANTITY GUIDELINES:
-- Generate AT LEAST 5-10 cards per page of content
-- For dense technical content, generate 10-15 cards per page
-- Don't skip any important concept - when in doubt, create a card
-- It's better to have more atomic cards than fewer complex ones
+10. **Avoid enumerations**: Do not ask for ordered lists. Break sequences into individual cards testing each step.
+
+11. **Combat interference**: Make similar concepts distinguishable. Add context to prevent confusion between similar terms.
+
+12. **Optimize wording**: Keep questions and answers concise and clear.
+    - Front: Short, specific question
+    - Back: Brief, direct answer (1-2 sentences max)
+
+13. **Refer to other memories**: Connect new knowledge to familiar concepts when possible.
+
+14. **Personalize and provide examples**: Include concrete examples in answers when helpful.
+
+15. **Rely on emotional states**: Frame questions around interesting, surprising, or counterintuitive aspects of the material when possible.
+
+16. **Context cues simplify wording**: Add brief context in brackets when needed.
+    - "[In genetics] What does DNA stand for?"
+
+17. **Redundancy does not contradict minimum information principle**: It's OK to create multiple cards testing the same concept from different angles (e.g., forward and reverse cards).
+
+18. **Provide sources**: When the document cites specific sources or page numbers, include them in the answer for reference.
+
+19. **Provide date stamping**: When content is time-sensitive or historical, include dates in the card.
+
+20. **Prioritize**: Focus more cards on core concepts and less on trivial details.
 
 ## CARD TYPES TO CREATE:
 - Definition cards: "What is [term]?" -> "Definition"
@@ -130,6 +117,8 @@ Analyze this PDF document THOROUGHLY and create comprehensive Anki flashcards fo
 - Example cards: "What is an example of X?" -> "Specific example"
 - Reverse cards: If useful, create both "What is X?" and "What is the term for [definition]?"
 
+Do NOT generate tags - tags are managed automatically.
+
 Return ONLY valid JSON with no additional text.
 """
 
@@ -138,7 +127,41 @@ CARD_OUTPUT_FORMAT = {
         {
             "front": "Question text goes here",
             "back": "Answer text goes here",
-            "tags": ["tag1", "tag2"],
+        }
+    ]
+}
+
+# =============================================================================
+# Image Handling Add-on (prepended to user prompt for markdown with images)
+# =============================================================================
+
+IMAGE_HANDLING_SECTION = """
+## IMAGE HANDLING:
+The document contains the following images that you can see:
+{image_list}
+
+Images can go in EITHER the front (question) OR back (answer) depending on what makes pedagogical sense:
+
+**Image in QUESTION (front)** - Use when testing recognition/interpretation:
+- "What concept does this diagram illustrate? [IMAGE: diagram.png]"
+- "What type of network topology is shown? [IMAGE: topology.png]"
+- "Identify the components in this architecture: [IMAGE: arch.png]"
+
+**Image in ANSWER (back)** - Use when the image supports/explains the answer:
+- Front: "What is the hierarchical structure of ISPs?"
+- Back: "Tier-1 (global), Tier-2 (regional), Tier-3 (access/local). [IMAGE: isp_hierarchy.png]"
+
+Choose the placement that best tests understanding. Visual recognition cards (image in front) are excellent for diagrams.
+
+For the output format, include an "images" array listing ALL image filenames used in each card (empty array if none).
+"""
+
+MARKDOWN_OUTPUT_FORMAT = {
+    "cards": [
+        {
+            "front": "Question text (may include [IMAGE: filename.png])",
+            "back": "Answer text (may include [IMAGE: filename.png])",
+            "images": ["filename.png"],
         }
     ]
 }
@@ -156,7 +179,7 @@ Always return valid JSON format with no additional text.
 """
 
 CONTINUE_GENERATION_USER = """
-Analyze this PDF document and create ADDITIONAL Anki flashcards for concepts that are MISSING.
+Analyze this document and create ADDITIONAL Anki flashcards for concepts that are MISSING.
 
 ## EXISTING CARDS (DO NOT DUPLICATE THESE):
 The following cards have already been created. Do NOT create cards that test the same concepts:
@@ -170,18 +193,12 @@ The following cards have already been created. Do NOT create cards that test the
 
 {focus_areas}
 
-## CARD CREATION RULES (Based on SuperMemo's 20 Rules):
-
-1. **Minimum Information Principle**: Each card tests ONE atomic piece of knowledge
-2. **Optimize Wording**: Keep questions and answers concise and clear
-3. **No Sets or Enumerations**: Create individual cards for each item
-4. **Context Cues**: Add brief context in brackets when needed
-
 ## IMPORTANT:
 - Only create cards for concepts NOT in the existing cards list
 - If you find no new concepts, return an empty cards array
 - Focus on depth - find subtle details, examples, and edge cases
 - Look for relationships between concepts that weren't captured
+- Follow SuperMemo's 20 Rules (minimum information, no sets/enumerations, etc.)
 
 Return ONLY valid JSON with no additional text.
 """
@@ -203,12 +220,13 @@ Review the following flashcards for quality and effectiveness:
 
 {cards_json}
 
-For each card, evaluate:
-1. Is the question clear and specific?
-2. Is the answer concise but complete?
-3. Does the card focus on an important concept?
-4. Is the card formatted properly?
-5. Does it follow the minimum information principle (one fact per card)?
+For each card, evaluate against SuperMemo's 20 Rules:
+1. Is the question clear and specific? (Rule 12: Optimize wording)
+2. Is the answer concise but complete? (Rule 4: Minimum information)
+3. Does the card focus on an important concept? (Rule 20: Prioritize)
+4. Does it test ONE atomic fact? (Rule 4: Minimum information)
+5. Does it avoid sets/enumerations? (Rules 9 & 10)
+6. Are similar concepts distinguished? (Rule 11: Combat interference)
 
 Improve any cards that don't meet these criteria.
 Return only the improved cards in JSON format.
@@ -219,10 +237,23 @@ VALIDATION_OUTPUT_FORMAT = {
         {
             "front": "Improved question text",
             "back": "Improved answer text",
-            "tags": ["tag1", "tag2"],
         }
     ]
 }
+
+
+# =============================================================================
+# Batch Context Template (for multi-batch processing)
+# =============================================================================
+
+BATCH_CONTEXT_TEMPLATE = """
+
+## BATCH CONTEXT:
+- This is batch {batch_num} of {total_batches}
+- Pages {context_pages} are included for context continuity (already processed)
+- Focus on generating cards for pages {new_pages} (new content)
+- Do NOT create cards for concepts already covered in context pages
+"""
 
 
 # =============================================================================
@@ -231,7 +262,7 @@ VALIDATION_OUTPUT_FORMAT = {
 
 GENERATION_PROMPT = PromptTemplate(
     name="card_generation",
-    description="Primary prompt for generating flashcards from PDF documents using SuperMemo's 20 Rules",
+    description="Unified prompt for generating flashcards from any document type using SuperMemo's 20 Rules",
     system_prompt=CARD_GENERATION_SYSTEM.strip(),
     user_prompt_template=CARD_GENERATION_USER.strip(),
     output_format=CARD_OUTPUT_FORMAT,
@@ -253,108 +284,12 @@ VALIDATION_PROMPT = PromptTemplate(
     output_format=VALIDATION_OUTPUT_FORMAT,
 )
 
-
-# =============================================================================
-# Batch Context Template (for multi-batch processing)
-# =============================================================================
-
-BATCH_CONTEXT_TEMPLATE = """
-
-## BATCH CONTEXT:
-- This is batch {batch_num} of {total_batches}
-- Pages {context_pages} are included for context continuity (already processed)
-- Focus on generating cards for pages {new_pages} (new content)
-- Do NOT create cards for concepts already covered in context pages
-"""
-
-
-# =============================================================================
-# All prompts registry (for easy access)
-# =============================================================================
-
-# =============================================================================
-# Markdown with Images Generation Prompts
-# =============================================================================
-
-MARKDOWN_GENERATION_SYSTEM = """
-You are an expert educational content designer specializing in spaced repetition and visual learning.
-Your task is to create COMPREHENSIVE Anki flashcards from markdown documents WITH IMAGES.
-
-Key principles:
-- VISUAL: Reference images when they illustrate key concepts
-- ATOMIC: One fact per card (minimum information principle)
-- COMPREHENSIVE: Cover ALL content including diagrams, charts, and visual explanations
-- CLEAR: Concise, unambiguous wording
-
-Images can be placed in EITHER the question (front) OR the answer (back):
-- Use [IMAGE: exact_filename.png] syntax to embed images
-- The image filename must EXACTLY match one from the document
-
-Generate as many cards as needed to fully cover the material. Always return valid JSON format.
-"""
-
-MARKDOWN_GENERATION_USER = """
-Analyze this markdown document and its {image_count} associated images to create comprehensive Anki flashcards.
-
-## IMAGE HANDLING:
-The document contains the following images that you can see:
-{image_list}
-
-Images can go in EITHER the front (question) OR back (answer) depending on what makes pedagogical sense:
-
-**Image in QUESTION (front)** - Use when testing recognition/interpretation:
-- "What concept does this diagram illustrate? [IMAGE: diagram.png]"
-- "What type of network topology is shown? [IMAGE: topology.png]"
-- "Identify the components in this architecture: [IMAGE: arch.png]"
-
-**Image in ANSWER (back)** - Use when the image supports/explains the answer:
-- Front: "What is the hierarchical structure of ISPs?"
-- Back: "Tier-1 (global), Tier-2 (regional), Tier-3 (access/local). [IMAGE: isp_hierarchy.png]"
-
-Choose the placement that best tests understanding. Visual recognition cards (image in front) are excellent for diagrams.
-
-## EXTRACTION GOALS - Be Exhaustive:
-- Extract EVERY definition, term, and concept
-- Create cards for ALL diagrams - prefer putting diagrams in the QUESTION to test visual recognition
-- Cover ALL examples and their applications
-- Include ALL key facts, processes, and relationships
-
-## CARD CREATION RULES (Based on SuperMemo's 20 Rules):
-
-1. **Minimum Information Principle**: Each card tests ONE atomic piece of knowledge
-2. **Optimize Wording**: Keep questions and answers concise and clear
-3. **No Sets or Enumerations**: Create individual cards for each item
-4. **Use Images Strategically**: Place in front for recognition, back for illustration
-5. **Context Cues**: Add brief context in brackets when needed
-
-{batch_context}
-
-## OUTPUT FORMAT:
-For each card, include:
-- front: The question (may include [IMAGE: filename.png])
-- back: The answer (may include [IMAGE: filename.png])
-- tags: Relevant tags for organization
-- images: Array of ALL image filenames used in this card (empty array if none)
-
-Return ONLY valid JSON with no additional text.
-"""
-
-MARKDOWN_OUTPUT_FORMAT = {
-    "cards": [
-        {
-            "front": "Question text (may include [IMAGE: filename.png])",
-            "back": "Answer text (may include [IMAGE: filename.png])",
-            "tags": ["tag1", "tag2"],
-            "images": ["filename.png"],
-        }
-    ]
-}
-
+# Markdown prompt = same system + base user prompt with image section prepended
 MARKDOWN_GENERATION_PROMPT = PromptTemplate(
     name="markdown_generation",
-    description="Prompt for generating flashcards from markdown with images using Claude's vision",
-    system_prompt=MARKDOWN_GENERATION_SYSTEM.strip(),
-    user_prompt_template=MARKDOWN_GENERATION_USER.strip(),
+    description="Same generation prompt with image handling section for markdown documents",
+    system_prompt=CARD_GENERATION_SYSTEM.strip(),
+    user_prompt_template=(IMAGE_HANDLING_SECTION + "\n" + CARD_GENERATION_USER).strip(),
     output_format=MARKDOWN_OUTPUT_FORMAT,
 )
 

@@ -23,6 +23,7 @@ from backend.db.schemas import (
     PDFChapter,
     PDFPageThumbnail,
     PDFPreviewResponse,
+    RenameSessionRequest,
     SessionResponse,
     SessionStatusResponse,
     SessionWithStats,
@@ -219,6 +220,10 @@ async def upload_markdown_preview(
         source_type=SourceType.MARKDOWN.value,
     )
 
+    # Auto-set display_name from markdown title
+    if doc.title:
+        session.display_name = doc.title
+
     # Store markdown metadata
     existing_images = [img.relative_path for img in doc.images if img.exists]
     session.pdf_metadata = {
@@ -398,6 +403,7 @@ async def list_sessions(db: Session = Depends(get_db)):
             SessionWithStats(
                 id=session.id,
                 filename=session.filename,
+                display_name=session.display_name,
                 status=session.status,
                 source_type=session.source_type,
                 total_chunks=session.total_chunks,
@@ -423,6 +429,7 @@ async def get_session(session_id: int, db: Session = Depends(get_db)):
     return SessionWithStats(
         id=session.id,
         filename=session.filename,
+        display_name=session.display_name,
         status=session.status,
         source_type=session.source_type,
         total_chunks=session.total_chunks,
@@ -433,6 +440,23 @@ async def get_session(session_id: int, db: Session = Depends(get_db)):
         pdf_metadata=session.pdf_metadata,
         **stats,
     )
+
+
+@router.patch("/{session_id}/rename", response_model=SessionResponse)
+async def rename_session(
+    session_id: int,
+    request: RenameSessionRequest,
+    db: Session = Depends(get_db),
+):
+    """Rename a session by setting its display name."""
+    session = db.query(DBSession).filter(DBSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session.display_name = request.display_name.strip()
+    db.commit()
+    db.refresh(session)
+    return session
 
 
 @router.get("/{session_id}/status", response_model=SessionStatusResponse)
@@ -483,6 +507,7 @@ async def finalize_session_endpoint(
     return SessionWithStats(
         id=session.id,
         filename=session.filename,
+        display_name=session.display_name,
         status=session.status,
         source_type=session.source_type,
         total_chunks=session.total_chunks,
@@ -515,7 +540,10 @@ async def delete_session(session_id: int, db: Session = Depends(get_db)):
     if session.filename:
         stem = Path(session.filename).stem
         for export_file in EXPORTS_DIR.glob(f"{stem}_*"):
-            export_file.unlink()
+            if export_file.is_dir():
+                shutil.rmtree(export_file)
+            else:
+                export_file.unlink()
 
     # Delete markdown extraction directory for this session
     if session.source_type == SourceType.MARKDOWN.value:

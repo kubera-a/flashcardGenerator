@@ -1,6 +1,7 @@
 """Service for managing card generation sessions."""
 
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -28,8 +29,7 @@ from config.prompts import (
     GENERATION_PROMPT,
     MARKDOWN_GENERATION_PROMPT,
 )
-from config.settings import CARD_IMAGES_DIR
-from modules.card_generation import CardGenerator
+from config.settings import CARD_IMAGES_DIR, CHUNK_SIZE, sanitize_filename
 from modules.llm_interface import LLMInterface
 from modules.markdown_processor import MarkdownProcessor
 from modules.pdf_processor import PDFProcessor
@@ -215,18 +215,13 @@ def _process_with_native_pdf(
             processed_pages.update(page_batch)
 
             # Save cards to database
+            deck_tag = sanitize_filename(session.display_name or session.filename)
             for card_data in response.get("cards", []):
-                tags = card_data.get("tags", [])
-
-                # Add metadata-based tags
-                if pdf_info.get("title"):
-                    tags.append(pdf_info["title"].replace(" ", "_").lower())
-
                 db_card = Card(
                     session_id=session.id,
                     front=card_data.get("front", ""),
                     back=card_data.get("back", ""),
-                    tags=tags,
+                    tags=[deck_tag],
                     status=CardStatus.PENDING.value,
                     chunk_index=batch_idx,
                 )
@@ -283,23 +278,31 @@ def _process_with_text_extraction(
     session.total_chunks = len(chunks)
     db.commit()
 
-    # Initialize generator
-    generator = CardGenerator(llm_interface=llm)
+    # Use centralized prompts (same as native PDF path)
+    generation_prompt = GENERATION_PROMPT.user_prompt_template
+    system_prompt = GENERATION_PROMPT.system_prompt
+    output_format = GENERATION_PROMPT.output_format
 
     # Generate cards for each chunk
     errors = []
     for i, chunk in enumerate(chunks):
         try:
-            cards = generator.generate_cards_from_chunk(chunk, metadata)
-            validated_cards = generator.validate_cards(cards)
+            full_prompt = f"{generation_prompt}\n\n## Document Content:\n{chunk}"
+
+            response = llm.generate_structured_output(
+                prompt=full_prompt,
+                output_format=output_format,
+                system_prompt=system_prompt,
+            )
 
             # Save cards to database
-            for card in validated_cards:
+            deck_tag = sanitize_filename(session.display_name or session.filename)
+            for card_data in response.get("cards", []):
                 db_card = Card(
                     session_id=session.id,
-                    front=card.front,
-                    back=card.back,
-                    tags=card.tags,
+                    front=card_data.get("front", ""),
+                    back=card_data.get("back", ""),
+                    tags=[deck_tag],
                     status=CardStatus.PENDING.value,
                     chunk_index=i,
                 )
@@ -476,15 +479,13 @@ def continue_generation(
                 )
 
                 # Save new cards
+                deck_tag = sanitize_filename(session.display_name or session.filename)
                 for card_data in response.get("cards", []):
-                    tags = card_data.get("tags", [])
-                    tags.append("continued_generation")
-
                     db_card = Card(
                         session_id=session.id,
                         front=card_data.get("front", ""),
                         back=card_data.get("back", ""),
-                        tags=tags,
+                        tags=[deck_tag],
                         status=CardStatus.PENDING.value,
                         chunk_index=max_chunk + batch_idx,
                     )
@@ -518,6 +519,74 @@ def continue_generation(
             pass
     finally:
         db.close()
+
+
+def chunk_markdown(content: str, images: list, chunk_size: int = CHUNK_SIZE) -> list[dict]:
+    """
+    Split markdown content into chunks, tracking which images belong to each chunk.
+
+    Splits on heading boundaries (## or #) when possible, falling back to
+    paragraph boundaries. Each chunk includes only the images referenced within it.
+
+    Args:
+        content: Full markdown text
+        images: List of MarkdownImage objects
+        chunk_size: Max characters per chunk
+
+    Returns:
+        List of dicts with 'content' (str) and 'images' (list) keys
+    """
+
+    IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")  # noqa: N806
+
+    # Split on headings (keep heading with its section)
+    sections = re.split(r"(?=^#{1,2}\s)", content, flags=re.MULTILINE)
+    sections = [s for s in sections if s.strip()]
+
+    chunks = []
+    current_chunk = ""
+
+    for section in sections:
+        if len(current_chunk) + len(section) <= chunk_size:
+            current_chunk += section
+        else:
+            if current_chunk.strip():
+                chunks.append(current_chunk)
+            # If a single section exceeds chunk_size, split by paragraphs
+            if len(section) > chunk_size:
+                paragraphs = section.split("\n\n")
+                current_chunk = ""
+                for para in paragraphs:
+                    if len(current_chunk) + len(para) + 2 <= chunk_size:
+                        current_chunk += para + "\n\n"
+                    else:
+                        if current_chunk.strip():
+                            chunks.append(current_chunk)
+                        current_chunk = para + "\n\n"
+            else:
+                current_chunk = section
+
+    if current_chunk.strip():
+        chunks.append(current_chunk)
+
+    # Build image lookup by relative path
+    image_lookup = {}
+    for img in images:
+        if img.exists and img.absolute_path:
+            image_lookup[img.relative_path] = img
+
+    # Associate images with their chunks
+    result = []
+    for chunk_text in chunks:
+        chunk_images = []
+        for match in IMAGE_PATTERN.finditer(chunk_text):
+            import urllib.parse
+            rel_path = urllib.parse.unquote(match.group(2))
+            if rel_path in image_lookup:
+                chunk_images.append(image_lookup[rel_path])
+        result.append({"content": chunk_text, "images": chunk_images})
+
+    return result
 
 
 def process_markdown_and_generate_cards(
@@ -572,114 +641,120 @@ def process_markdown_and_generate_cards(
         # Get list of existing image paths
         existing_images = [img for img in doc.images if img.exists and img.absolute_path]
 
-        # Update session metadata with image count
-        session.total_chunks = 1  # Single batch for markdown
+        # Chunk the markdown content
+        chunks = chunk_markdown(doc.content, doc.images)
+
+        # Update session metadata
+        session.total_chunks = len(chunks)
         session.pdf_metadata["image_count"] = len(existing_images)
         db.commit()
 
-        # Build prompt using centralized template
-        image_list = "\n".join(
-            f"- {img.relative_path}" for img in existing_images
-        )
-        prompt = MARKDOWN_GENERATION_PROMPT.user_prompt_template.format(
-            image_count=len(existing_images),
-            image_list=image_list,
-            batch_context="",  # No batching for markdown
-        )
         system_prompt = MARKDOWN_GENERATION_PROMPT.system_prompt
         output_format = MARKDOWN_GENERATION_PROMPT.output_format
 
-        # Collect image paths for LLM
-        image_paths = [img.absolute_path for img in existing_images]
-
-        # Generate cards from markdown with images
-        try:
-            response = llm.generate_structured_from_markdown(
-                markdown_content=doc.content,
-                images=image_paths,
-                prompt=prompt,
-                output_format=output_format,
-                system_prompt=system_prompt,
-            )
-        except Exception as e:
-            logger.error(f"Error generating cards from markdown: {e}", exc_info=True)
-            session.status = SessionStatus.FAILED.value
-            session.pdf_metadata["error"] = str(e)
-            db.commit()
-            return
-
-        # Create image filename mapping for storage
-        image_mapping = processor.get_image_mapping(doc, session.id)
-
-        # Use centralized image storage directory
+        # Create image filename mapping and copy images to storage upfront
+        deck_tag = sanitize_filename(session.display_name or session.filename)
+        image_mapping = processor.get_image_mapping(doc, deck_tag)
         image_storage_dir = CARD_IMAGES_DIR
-
-        # Copy images to storage with session-prefixed names
         processor.copy_images_to_storage(doc, image_mapping, image_storage_dir)
 
-        # Save cards to database
+        # Process each chunk
         card_count = 0
-        for card_data in response.get("cards", []):
-            front = card_data.get("front", "")
-            back = card_data.get("back", "")
-            tags = card_data.get("tags", [])
-            card_images = card_data.get("images", [])
+        errors = []
 
-            # Add source tag
-            if metadata.get("title"):
-                tags.append(metadata["title"].replace(" ", "_").lower())
+        for chunk_idx, chunk_data in enumerate(chunks):
+            try:
+                chunk_images = chunk_data["images"]
+                image_paths = [img.absolute_path for img in chunk_images]
 
-            # Create the card
-            db_card = Card(
-                session_id=session.id,
-                front=front,
-                back=back,
-                tags=tags,
-                status=CardStatus.PENDING.value,
-                chunk_index=0,
-            )
-            db.add(db_card)
-            db.flush()  # Get the card ID
-
-            # Create CardImage records for images referenced in this card
-            for img_filename in card_images:
-                # Find the matching image in our document
-                matching_img = None
-                for img in existing_images:
-                    # Match by filename (with or without path)
-                    if img_filename in img.relative_path or Path(img.relative_path).name == img_filename:
-                        matching_img = img
-                        break
-
-                if matching_img and matching_img.relative_path in image_mapping:
-                    stored_name = image_mapping[matching_img.relative_path]
-                    file_size = matching_img.absolute_path.stat().st_size if matching_img.absolute_path else 0
-
-                    # Determine media type from extension
-                    suffix = matching_img.absolute_path.suffix.lower() if matching_img.absolute_path else ".png"
-                    media_types = {
-                        ".png": "image/png",
-                        ".jpg": "image/jpeg",
-                        ".jpeg": "image/jpeg",
-                        ".gif": "image/gif",
-                        ".webp": "image/webp",
-                    }
-                    media_type = media_types.get(suffix, "image/png")
-
-                    card_image = CardImage(
-                        card_id=db_card.id,
-                        session_id=session.id,
-                        original_filename=img_filename,
-                        stored_filename=stored_name,
-                        media_type=media_type,
-                        file_size=file_size,
+                # Build prompt for this chunk
+                image_list = "\n".join(
+                    f"- {img.relative_path}" for img in chunk_images
+                )
+                prompt = MARKDOWN_GENERATION_PROMPT.user_prompt_template.format(
+                    image_list=image_list if image_list else "(no images in this section)",
+                )
+                if len(chunks) > 1:
+                    prompt += (
+                        f"\n\n## BATCH CONTEXT:\n"
+                        f"- This is chunk {chunk_idx + 1} of {len(chunks)}\n"
+                        f"- Focus on generating cards for THIS section only\n"
                     )
-                    db.add(card_image)
 
-            card_count += 1
+                response = llm.generate_structured_from_markdown(
+                    markdown_content=chunk_data["content"],
+                    images=image_paths,
+                    prompt=prompt,
+                    output_format=output_format,
+                    system_prompt=system_prompt,
+                )
 
-        session.processed_chunks = 1
-        session.status = SessionStatus.READY.value
+                # Save cards to database
+                for card_data in response.get("cards", []):
+                    front = card_data.get("front", "")
+                    back = card_data.get("back", "")
+                    card_images_list = card_data.get("images", [])
+
+                    db_card = Card(
+                        session_id=session.id,
+                        front=front,
+                        back=back,
+                        tags=[deck_tag],
+                        status=CardStatus.PENDING.value,
+                        chunk_index=chunk_idx,
+                    )
+                    db.add(db_card)
+                    db.flush()
+
+                    # Create CardImage records for images referenced in this card
+                    for img_filename in card_images_list:
+                        matching_img = None
+                        for img in existing_images:
+                            if img_filename in img.relative_path or Path(img.relative_path).name == img_filename:
+                                matching_img = img
+                                break
+
+                        if matching_img and matching_img.relative_path in image_mapping:
+                            stored_name = image_mapping[matching_img.relative_path]
+                            file_size = matching_img.absolute_path.stat().st_size if matching_img.absolute_path else 0
+
+                            suffix = matching_img.absolute_path.suffix.lower() if matching_img.absolute_path else ".png"
+                            media_types = {
+                                ".png": "image/png",
+                                ".jpg": "image/jpeg",
+                                ".jpeg": "image/jpeg",
+                                ".gif": "image/gif",
+                                ".webp": "image/webp",
+                            }
+                            media_type = media_types.get(suffix, "image/png")
+
+                            card_image = CardImage(
+                                card_id=db_card.id,
+                                session_id=session.id,
+                                original_filename=img_filename,
+                                stored_filename=stored_name,
+                                media_type=media_type,
+                                file_size=file_size,
+                            )
+                            db.add(card_image)
+
+                    card_count += 1
+
+                session.processed_chunks = chunk_idx + 1
+                db.commit()
+
+            except Exception as e:
+                logger.error(f"Error processing markdown chunk {chunk_idx}: {e}", exc_info=True)
+                errors.append(str(e))
+                continue
+
+        # Update session status
+        if card_count == 0 and errors:
+            session.status = SessionStatus.FAILED.value
+            session.pdf_metadata["error"] = errors[0] if len(errors) == 1 else f"{len(errors)} errors occurred"
+        else:
+            session.status = SessionStatus.READY.value
+
         session.completed_at = datetime.utcnow()
         session.pdf_metadata["cards_generated"] = card_count
 
@@ -692,7 +767,7 @@ def process_markdown_and_generate_cards(
             )
 
         db.commit()
-        logger.info(f"Markdown processing completed for session {session_id}: {card_count} cards generated")
+        logger.info(f"Markdown processing completed for session {session_id}: {card_count} cards from {len(chunks)} chunks")
 
     except Exception as e:
         logger.error(f"Error processing markdown session {session_id}: {e}", exc_info=True)

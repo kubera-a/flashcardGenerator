@@ -1,17 +1,46 @@
+import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { sessionsApi, exportApi } from '../api/client';
 import type { SessionWithStats } from '../types';
 
-function SessionCard({ session, onDelete, onExport }: {
+function SessionCard({ session, onDelete, onExport, onRename }: {
   session: SessionWithStats;
   onDelete: (id: number) => void;
   onExport: (id: number) => void;
+  onRename: (id: number, name: string) => void;
 }) {
   const navigate = useNavigate();
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState(session.display_name || session.filename);
+  const inputRef = useRef<HTMLInputElement>(null);
   const progress = session.total_chunks > 0
     ? Math.round((session.processed_chunks / session.total_chunks) * 100)
     : 0;
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  const handleRenameSubmit = () => {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== (session.display_name || session.filename)) {
+      onRename(session.id, trimmed);
+    }
+    setIsEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleRenameSubmit();
+    } else if (e.key === 'Escape') {
+      setEditValue(session.display_name || session.filename);
+      setIsEditing(false);
+    }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -24,10 +53,35 @@ function SessionCard({ session, onDelete, onExport }: {
     }
   };
 
+  const displayName = session.display_name || session.filename;
+
   return (
     <div className="session-card">
       <div className="session-header">
-        <h3>{session.filename}</h3>
+        {isEditing ? (
+          <input
+            ref={inputRef}
+            className="session-name-input"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onBlur={handleRenameSubmit}
+            onKeyDown={handleKeyDown}
+          />
+        ) : (
+          <div className="session-name-row">
+            <h3>{displayName}</h3>
+            <button
+              className="btn-icon"
+              onClick={() => {
+                setEditValue(displayName);
+                setIsEditing(true);
+              }}
+              title="Rename session"
+            >
+              &#9998;
+            </button>
+          </div>
+        )}
         <span
           className="status-badge"
           style={{ backgroundColor: getStatusColor(session.status) }}
@@ -76,7 +130,7 @@ function SessionCard({ session, onDelete, onExport }: {
             {session.status === 'finalized' ? 'View Cards' : 'Review Cards'}
           </button>
         )}
-        {(session.approved_count > 0 || session.status === 'finalized') && (
+        {(session.card_count - session.rejected_count > 0 || session.status === 'finalized') && (
           <button
             className="btn btn-secondary"
             onClick={() => onExport(session.id)}
@@ -108,6 +162,14 @@ export default function HomePage() {
     refetchInterval: 5000, // Poll for updates
   });
 
+  const renameMutation = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) =>
+      sessionsApi.rename(id, name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sessions'] });
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: number) => sessionsApi.delete(id),
     onSuccess: () => {
@@ -123,6 +185,10 @@ export default function HomePage() {
       window.open(downloadUrl, '_blank');
     },
   });
+
+  const handleRename = (id: number, name: string) => {
+    renameMutation.mutate({ id, name });
+  };
 
   const handleDelete = (id: number) => {
     if (confirm('Are you sure you want to delete this session?')) {
@@ -166,6 +232,7 @@ export default function HomePage() {
               session={session}
               onDelete={handleDelete}
               onExport={handleExport}
+              onRename={handleRename}
             />
           ))}
         </div>
